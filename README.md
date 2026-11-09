@@ -11,7 +11,11 @@ Stormworks Mod Loader: `swml.exe` (the mod window and launcher) and `swml_core.d
 
 ## Install
 
-Extract the release zip and run `install.bat`. It copies the loader to `%LOCALAPPDATA%\swml` and opens it. Add mods with "Add mod...".
+Extract the release zip and run `install.bat`. It copies the loader to `%LOCALAPPDATA%\swml` and opens it. After that copy the launch options & add them to stormworks properties. 
+After that start stormworks from steam normally, you can then click "Add Mods..." and select a zipfile for a mod.
+
+
+**Dedicated servers are not supported!** They're an entirely different binary and need two different versions of... well, everything. They might get supported later.
 
 ## Build
 
