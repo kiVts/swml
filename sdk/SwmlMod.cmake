@@ -1,0 +1,13 @@
+# Available after add_subdirectory(<sdk-dir> <binary-dir>).
+function(swml_add_mod name)
+  cmake_parse_arguments(M "" "" "SOURCES" ${ARGN})
+  if(NOT M_SOURCES)
+    message(FATAL_ERROR "swml_add_mod(${name} SOURCES ...) requires source files")
+  endif()
+  add_library(${name} SHARED ${M_SOURCES})
+  target_link_libraries(${name} PRIVATE swml_modsdk swml_lookup opengl32 shell32 ole32)
+  target_compile_features(${name} PRIVATE cxx_std_20)
+  target_compile_definitions(${name} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+  target_compile_options(${name} PRIVATE /W4 /permissive- /utf-8)
+  set_property(TARGET ${name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endfunction()
