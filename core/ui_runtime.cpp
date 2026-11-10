@@ -1,4 +1,5 @@
 #include "core.h"
+#include "health.h"
 #include "native_ui.h"
 #include "json.h"
 #include <algorithm>
@@ -13,7 +14,7 @@
 
 namespace sdk_ui {
 namespace {
-struct Watch { swml_handle id; swml_mod* owner; uintptr_t table; swml_ui_callback callback; void* context; bool active = true; uint32_t running = 0; };
+struct Watch { swml_handle id; swml_mod* owner; uintptr_t table; swml_ui_callback callback; void* context; bool active = true; uint32_t running = 0; bool filtered = false; swml_ui_rect filter{}; };
 struct Root { uint64_t id, public_handle = 0; void* native; uintptr_t game; std::shared_ptr<Watch> watch; bool live = true; std::set<uint64_t> bindings, controls; };
 struct Node {
     uint64_t id; void* native; std::shared_ptr<Root> root; bool owned;
@@ -146,7 +147,10 @@ void call(const std::shared_ptr<Root>& root, uint32_t kind, uint64_t element = 0
         if (!okay) root->watch->active = false;
         if (!root->watch->active && !root->watch->running) watches.erase(root->watch->id);
     }
-    if (!okay) core_log(root->watch->owner->id.c_str(), "native UI callback failed; watch disabled");
+    if (!okay) {
+        swml_health::note_fault();
+        core_log(root->watch->owner->id.c_str(), "native UI callback failed; watch disabled");
+    }
 }
 }
 void set_backend_for_tests(const NativeUiBackend* value) { test_backend = value; backend_ready.store(false); controls_ready.store(false); }
@@ -166,16 +170,20 @@ swml_result enable(swml_mod* m) {
     if (!backend_ready.load() && !backend().enable()) return SWML_UNAVAILABLE;
     backend_ready.store(true); return SWML_OK;
 }
-swml_result watch(swml_mod* m, const char* name, swml_ui_callback callback, void* context, swml_handle* out) {
+swml_result watch_rect(swml_mod* m, const char* name, const swml_ui_rect* filter, swml_ui_callback callback, void* context, swml_handle* out) {
     if (out) *out = 0;
-    if (!out || !name || !*name || strnlen_s(name, 256) >= 256 || !callback) return SWML_INVALID;
+    if (!out || !name || !*name || strnlen_s(name, 256) >= 256 || !callback || (filter && !valid_rect(*filter))) return SWML_INVALID;
     auto result = enable(m); if (result != SWML_OK) return result;
     uintptr_t table = backend().class_table(name); if (!table) return SWML_UNAVAILABLE;
     std::lock_guard lock(mutex);
     if (!owners.contains(m)) return SWML_DENIED;
     if (watches.size() >= 64) return SWML_LIMIT;
     auto w = std::make_shared<Watch>(); w->id = next_id++; w->owner = m; w->table = table; w->callback = callback; w->context = context;
+    if (filter) { w->filtered = true; w->filter = *filter; }
     watches[w->id] = w; interested_tables.insert(table); traversal_needed.store(true); *out = w->id; return SWML_OK;
+}
+swml_result watch(swml_mod* m, const char* name, swml_ui_callback callback, void* context, swml_handle* out) {
+    return watch_rect(m, name, nullptr, callback, context, out);
 }
 swml_result unwatch(swml_mod* m, swml_handle id) {
     std::lock_guard lock(mutex);
@@ -354,6 +362,7 @@ void update(void* native, uintptr_t game) {
         if (!created.contains(native)) for (const auto& [id, w] : watches) if (w->active && w->table == backend().table(native)) {
             bool found = false; for (const auto& pair : callbacks) if (pair.first->watch == w) found = true;
             if (!found) {
+                if (w->filtered && !same_rect(backend().inspect(native).rect, w->filter)) continue;
                 if (roots.size() >= 256) break;
                 auto root = std::make_shared<Root>(); root->id = next_id++; root->native = native; root->game = game; root->watch = w;
                 if (!bind(root, native)) break;

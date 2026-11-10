@@ -1,4 +1,5 @@
 #include "core.h"
+#include "health.h"
 #include "core_v2.h"
 #include <algorithm>
 #include <atomic>
@@ -147,7 +148,10 @@ void invoke(const std::shared_ptr<Entry>& e, const char* topic, const char* send
         if (!okay) { ++g_failures; e->active = false; }
         if (!e->active && !e->running && g_entries.contains(e->id)) unlink_entry(e);
     }
-    if (!okay) core_log(e->owner->id.c_str(), "SDK callback failed; subscription/task disabled");
+    if (!okay) {
+        swml_health::note_fault();
+        core_log(e->owner->id.c_str(), "SDK callback failed; subscription/task disabled");
+    }
 }
 void deliver(uint32_t lane, const char* topic, const char* sender,
               const void* data, uint32_t size, swml_mod* recipient = nullptr) {

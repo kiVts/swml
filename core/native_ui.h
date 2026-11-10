@@ -37,6 +37,7 @@ void drop(swml_mod*);
 bool enabled();
 swml_result enable(swml_mod*);
 swml_result watch(swml_mod*, const char*, swml_ui_callback, void*, swml_handle*);
+swml_result watch_rect(swml_mod*, const char*, const swml_ui_rect*, swml_ui_callback, void*, swml_handle*);
 swml_result unwatch(swml_mod*, swml_handle);
 swml_result create(swml_mod*, swml_ui_handle, const swml_ui_desc*, swml_ui_handle*);
 swml_result destroy(swml_mod*, swml_ui_handle);

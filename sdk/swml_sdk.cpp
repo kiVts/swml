@@ -356,6 +356,7 @@ extern "C" __declspec(dllexport) int swml_mod_init(const swml_api* api, swml_mod
         int misses = g_port_misses.load();
         InstallResult r = run_install(h.install);
         bool missed = g_port_misses.load() != misses;
+        if (r != kInstalled || missed) swml_report_fault(g_api, g_mod);
         if (r == kCrashed)
             swlog("FAILED %s: crashed while installing%s; the other parts carry on", h.name,
                   missed ? " (it used an address missing from the port table)" : "");
