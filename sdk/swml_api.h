@@ -16,6 +16,12 @@ typedef struct swml_api_v2 swml_api_v2;
 typedef struct swml_api_v3 swml_api_v3;
 typedef struct swml_api_v4 swml_api_v4;
 
+/* Process-local loader snapshot. Faults latch until restart; disabled mods do not
+ * count. A fault indicates a detected mod/core failure, not a crash predictor. */
+typedef struct swml_runtime_status {
+    uint32_t size, loaded_mods, fault_found, ready;
+} swml_runtime_status;
+
 typedef void (*swml_present_cb)(void* hdc, void* ctx);
 typedef void (*swml_frame_cb)(double frame_ms, void* ctx);
 typedef void (*swml_loop_begin_cb)(void* ctx);
@@ -58,6 +64,9 @@ typedef struct swml_api {
     const swml_api_v2* v2;
     const swml_api_v3* v3;
     const swml_api_v4* v4;
+    /* Optional extension after the frozen prefix; check size before use. */
+    int (*runtime_status)(swml_runtime_status*);
+    void (*report_fault)(swml_mod*);
 } swml_api;
 
 #define SWML_API_V1_SIZE ((uint32_t)offsetof(swml_api, v2))
@@ -67,6 +76,10 @@ typedef struct swml_api {
 #define SWML_API_HAS_V2(api) ((api) && (api)->version >= 2 && (api)->size >= SWML_API_V2_SIZE && (api)->v2)
 #define SWML_API_HAS_V3(api) ((api) && (api)->version >= 3 && (api)->size >= SWML_API_V3_SIZE && (api)->v3)
 #define SWML_API_HAS_V4(api) ((api) && (api)->version >= 4 && (api)->size >= SWML_API_V4_SIZE && (api)->v4)
+#define SWML_API_HAS_STATUS(api) ((api) && (api)->size >= offsetof(swml_api, report_fault) + sizeof(void*) && (api)->runtime_status && (api)->report_fault)
+static inline void swml_report_fault(const swml_api* api, swml_mod* mod) {
+    if (SWML_API_HAS_STATUS(api)) api->report_fault(mod);
+}
 
 /* Every mod DLL exports this. Return 1 if the mod is running, 0 to be unloaded (its hooks are
  * removed; call set_status first to say why). */

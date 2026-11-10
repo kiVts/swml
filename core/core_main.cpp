@@ -11,6 +11,7 @@
 #include "core_v3.h"
 #include "core_v4.h"
 #include "log_sessions.h"
+#include "health.h"
 
 #include "game.h"
 #include "log.h"
@@ -178,6 +179,7 @@ int api_on_loop(swml_mod* m, swml_loop_begin_cb b, swml_loop_end_cb e, swml_loop
 }
 void api_set_status(swml_mod* m, const char* text)
 {
+    if (text && swml_health::bad_status(text)) swml_health::note_fault();
     m->status = text ? text : "";
     core_write_status(m);
 }
@@ -189,6 +191,8 @@ const swml_api g_api = {
     core_v2_api(),
     core_v3_api(),
     core_v4_api(),
+    swml_health::snapshot,
+    [](swml_mod*) { swml_health::note_fault(); },
 };
 
 // --- start-up ----------------------------------------------------------------------------------
@@ -405,9 +409,20 @@ DWORD WINAPI init_thread(void*)
     core_crash_install();
     core_events_install();
     load_mods();
+    uint32_t loaded = 0;
+    for (const auto* m : g_mods) {
+        loaded += m->operational;
+        if ((!m->operational && m->status != "disabled") || swml_health::bad_status(m->status))
+            swml_health::note_fault();
+    }
+    swml_health::loaded.store(loaded, std::memory_order_relaxed);
     core_v2_ready();
-    if (MH_STATUS st = MH_EnableHook(MH_ALL_HOOKS); st != MH_OK) corelog("MH_EnableHook failed: %s", MH_StatusToString(st));
+    if (MH_STATUS st = MH_EnableHook(MH_ALL_HOOKS); st != MH_OK) {
+        swml_health::note_fault();
+        corelog("MH_EnableHook failed: %s", MH_StatusToString(st));
+    }
     g_enabled_all = true;
+    swml_health::ready.store(true, std::memory_order_release);
     int running = 0;
     for (auto* m : g_mods) running += m->module && !m->hooks.empty();
     corelog("start-up done: %zu mods found, %d running with hooks", g_mods.size(), running);

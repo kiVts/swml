@@ -1,4 +1,5 @@
 #include "core.h"
+#include "health.h"
 #include "core_v2.h"
 #include "core_v3.h"
 #include "native_ui.h"
@@ -46,6 +47,7 @@ const char* result_name(swml_result result) {
 swml_result log(swml_mod* m, uint32_t level, const char* message) {
     if (level > SWML_LOG_ERROR || !utf8(message, 16384) || strchr(message, '\r') || strchr(message, '\n')) return SWML_INVALID;
     if (!registered(m)) return SWML_DENIED;
+    if (level == SWML_LOG_ERROR) swml_health::note_fault();
     if (level < std::atomic_ref(m->log_threshold).load()) return SWML_OK;
     const char* levels[]{"DEBUG", "INFO", "WARN", "ERROR"};
     std::string line = std::string("[") + levels[level] + "] " + message;
@@ -107,7 +109,7 @@ const swml_api_v3 api{
     command_register, command_remove, command_run, command_list,
     sdk_ui::enable, sdk_ui::watch, sdk_ui::unwatch, sdk_ui::create, sdk_ui::destroy,
     sdk_ui::children, sdk_ui::find_class, sdk_ui::inspect, sdk_ui::set_rect, sdk_ui::set_visible,
-    sdk_ui::set_enabled, sdk_ui::set_text, sdk_ui::get_text
+    sdk_ui::set_enabled, sdk_ui::set_text, sdk_ui::get_text, sdk_ui::watch_rect
 };
 }
 const swml_api_v3* core_v3_api() { return &api; }

@@ -1,5 +1,18 @@
 # SWML SDK
 
+`runtime_status` takes a `swml_runtime_status` with `size = sizeof(status)` and
+returns a lock-free snapshot. Wait for `ready` before displaying `loaded_mods`.
+The count includes operational DLL and data-only mods, including the status mod
+itself, and excludes disabled or failed mods. `fault_found` stays set until the
+process restarts. Load/install failures, partial installs, caught callback faults,
+structured ERROR logs and explicit `report_fault(owner)` reports set it. It is
+a report of detected failures, not a guarantee that the game has no other faults.
+
+`ui_watch_rect` has the same lifecycle as `ui_watch`, with an optional copied,
+exact-match root rectangle filter. Filtering happens before allocating native UI
+handles, so watching a common container class does not consume handles for every
+unrelated screen. A null filter behaves like `ui_watch`.
+
 Native buttons now resize their background geometry through the game's size
 method. Require `SWML_V3_CAP_UI_BUTTON_RESIZE` when fitting dynamic backgrounds.
 
