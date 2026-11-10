@@ -183,4 +183,4 @@ bool fetch_index(Index& index, std::wstring& error) {
 bool update_mod(const std::wstring& root, const Entry& entry, std::wstring& error) {
     return guarded(error, [&] { install_package(root, entry, https_get(entry.url, kPackageLimit)); });
 }
-} // namespace swml_updates
+}
