@@ -13,6 +13,8 @@
 #include "field_dialog.h"
 #include "settings_editor.h"
 #include "mod_manifest.h"
+#include "updates.h"
+#include "swml_v2.h"
 
 #include <windows.h>
 #include <commctrl.h>
@@ -24,8 +26,10 @@
 #include <algorithm>
 #include <cwchar>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #pragma comment(lib, "comctl32.lib")
@@ -273,7 +277,20 @@ enum {
     IDC_LIST = 100, IDC_DETAILS, IDC_ADD, IDC_REMOVE, IDC_FOLDER, IDC_SETTINGS, IDC_LOGS, IDC_PLAY, IDC_PLAY_VANILLA, IDC_COPY,
     IDC_HINT,
     IDC_DOCTOR, IDC_ROLLBACK,
+    IDC_CHECK_UPDATES, IDC_UPDATE, IDC_UPDATE_ALL, IDC_LOADER_NOTICE, IDC_UPDATE_STATUS,
 };
+
+constexpr UINT WM_SWML_WORK_DONE = WM_APP + 1;
+struct WorkResult {
+    bool check = false, have_index = false;
+    swml_updates::Index index;
+    std::wstring error, failures;
+    int updated = 0;
+};
+
+swml_updates::Index g_index;
+bool g_have_index = false, g_checking = false, g_installing = false;
+HWND g_update_status;
 
 HWND g_wnd, g_list, g_details, g_hint;
 HWND g_buttons[9];
@@ -302,6 +319,37 @@ int selected()
     return static_cast<int>(it.lParam);
 }
 
+const swml_updates::Entry* offered_update(const Mod& m)
+{
+    if (!g_have_index) return nullptr;
+    try {
+        auto found = g_index.mods.find(swml_manifest::utf8(m.id));
+        if (found == g_index.mods.end() || !swml_updates::newer(found->second.version, swml_manifest::utf8(m.version))) return nullptr;
+        return &found->second;
+    } catch (const std::exception&) { return nullptr; }
+}
+
+bool can_update(const Mod& m)
+{
+    auto* entry = offered_update(m);
+    return entry && entry->api <= SWML_API_VERSION;
+}
+
+void refresh_buttons()
+{
+    int i = selected();
+    bool any = std::any_of(g_mods.begin(), g_mods.end(), can_update), idle = !g_installing;
+    auto enable = [](int id, bool on) { EnableWindow(GetDlgItem(g_wnd, id), on); };
+    for (int id : {IDC_REMOVE, IDC_SETTINGS}) enable(id, i >= 0 && idle);
+    enable(IDC_FOLDER, i >= 0);
+    for (int id : {IDC_ADD, IDC_ROLLBACK}) enable(id, idle);
+    enable(IDC_CHECK_UPDATES, idle && !g_checking);
+    enable(IDC_UPDATE, idle && i >= 0 && can_update(g_mods[i]));
+    enable(IDC_UPDATE_ALL, idle && any);
+    bool playable = idle && !g_game_cmd.empty();
+    for (int id : {IDC_PLAY, IDC_PLAY_VANILLA}) enable(id, playable);
+}
+
 void show_details()
 {
     int i = selected();
@@ -314,6 +362,12 @@ void show_details()
         t += L"Multiplayer: " + std::wstring(mp_text(m.multiplayer)) + L"\r\n";
         t += L"Last run: " + m.status + (m.status_time.empty() ? L"" : L"  (" + m.status_time + L")") + L"\r\n";
         if (!m.problem.empty()) t += L"Cannot load: " + m.problem + L"\r\n";
+        if (auto* entry = offered_update(m)) {
+            t += L"Update available: v" + swml_manifest::wide(entry->version);
+            t += entry->api > SWML_API_VERSION ? L" (needs a newer SWML)\r\n" : L"\r\n";
+        } else if (g_have_index && !g_index.mods.contains(swml_manifest::utf8(m.id))) {
+            t += L"Updates: not in the SWML mod index, so it isn't checked for updates\r\n";
+        }
         t += L"Folder: " + m.dir + L"\r\n\r\n";
         t += m.summary + L"\r\n\r\n";
         std::wstring r = m.readme;
@@ -327,7 +381,13 @@ void show_details()
         t += out;
     }
     SetWindowTextW(g_details, t.c_str());
-    for (int id : {IDC_REMOVE, IDC_FOLDER, IDC_SETTINGS}) EnableWindow(GetDlgItem(g_wnd, id), i >= 0);
+    refresh_buttons();
+}
+
+std::wstring version_text(const Mod& m)
+{
+    auto* entry = offered_update(m);
+    return entry ? m.version + L" → " + swml_manifest::wide(entry->version) : m.version;
 }
 
 std::wstring status_word(const Mod& m)
@@ -352,8 +412,9 @@ void fill_list(const std::wstring& select_id = L"")
         it.pszText = const_cast<wchar_t*>(g_mods[i].name.c_str());
         it.lParam = static_cast<LPARAM>(i);
         int row = ListView_InsertItem(g_list, &it);
-        std::wstring st = status_word(g_mods[i]);
-        ListView_SetItemText(g_list, row, 1, const_cast<wchar_t*>(st.c_str()));
+        std::wstring version = version_text(g_mods[i]), st = status_word(g_mods[i]);
+        ListView_SetItemText(g_list, row, 1, const_cast<wchar_t*>(version.c_str()));
+        ListView_SetItemText(g_list, row, 2, const_cast<wchar_t*>(st.c_str()));
         ListView_SetCheckState(g_list, row, g_mods[i].enabled);
         if (g_mods[i].id == select_id) sel = row;
     }
@@ -368,15 +429,17 @@ void layout()
     if (!g_wnd || !g_list || !g_details) return;
     RECT rc;
     GetClientRect(g_wnd, &rc);
-    int w = rc.right, h = rc.bottom, m = S(10), bh = S(28), list_w = S(300);
+    int w = rc.right, h = rc.bottom, m = S(10), bh = S(28), list_w = S(380);
     int bottom = h - m - bh;
     const int top=S(48);
     MoveWindow(g_list, m, top, list_w, bottom - m - bh - top, TRUE);
     MoveWindow(g_details, 2 * m + list_w, top, w - 3 * m - list_w, bottom - m - bh - top, TRUE);
     int tool_x=m;
-    for (int control : {IDC_DOCTOR,IDC_ROLLBACK}) {
-        MoveWindow(GetDlgItem(g_wnd,control),tool_x,m,S(108),bh,TRUE); tool_x+=S(114);
+    const std::pair<int,int> tools[]={{IDC_DOCTOR,108},{IDC_ROLLBACK,108},{IDC_CHECK_UPDATES,130},{IDC_UPDATE,100},{IDC_UPDATE_ALL,90}};
+    for (auto [control,width] : tools) {
+        MoveWindow(GetDlgItem(g_wnd,control),tool_x,m,S(width),bh,TRUE); tool_x+=S(width+6);
     }
+    MoveWindow(GetDlgItem(g_wnd,IDC_LOADER_NOTICE),w-m-S(170),m,S(170),bh,TRUE);
     // middle row: mod buttons
     int x = m, y = bottom - m - bh;
     int ids[] = {IDC_ADD, IDC_REMOVE, IDC_FOLDER, IDC_SETTINGS, IDC_LOGS};
@@ -385,6 +448,7 @@ void layout()
         MoveWindow(GetDlgItem(g_wnd, ids[i]), x, y, widths[i], bh, TRUE);
         x += widths[i] + S(6);
     }
+    MoveWindow(g_update_status, x + S(6), y + S(6), w - m - x - S(6), bh - S(6), TRUE);
     // bottom row: play
     MoveWindow(GetDlgItem(g_wnd, IDC_PLAY), w - m - S(120), bottom, S(120), bh, TRUE);
     MoveWindow(GetDlgItem(g_wnd, IDC_PLAY_VANILLA), w - m - S(120) - S(6) - S(150), bottom, S(150), bh, TRUE);
@@ -429,24 +493,6 @@ std::wstring pick_mod_source(HWND owner)
     return result;
 }
 
-// A folder containing mod.ini: the folder itself or one level down (zips often wrap a folder).
-std::wstring find_mod_root(const std::wstring& dir)
-{
-    if (exists(dir + L"\\mod.ini")) return dir;
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    std::wstring found;
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.cFileName[0] != L'.' &&
-                exists(dir + L"\\" + fd.cFileName + L"\\mod.ini"))
-                found = dir + L"\\" + fd.cFileName;
-        } while (found.empty() && FindNextFileW(h, &fd));
-        FindClose(h);
-    }
-    return found;
-}
-
 void add_mod()
 {
     std::wstring src = pick_mod_source(g_wnd);
@@ -470,7 +516,7 @@ void add_mod()
             shell_op(FO_DELETE, temp, L"", FOF_NOCONFIRMATION | FOF_NOERRORUI);
             return;
         }
-        folder = find_mod_root(temp);
+        folder = swml_updates::find_mod_root(temp);
     } else {
         folder = src.substr(0, src.find_last_of(L'\\'));
     }
@@ -483,6 +529,12 @@ void add_mod()
         if (exists(target)) {
             go = MessageBoxW(g_wnd, (L"Update mod '" + id + L"'? Settings and saved mod data are preserved. The previous installation remains available through Roll back.").c_str(),
                              L"Add mod", MB_YESNO | MB_ICONQUESTION) == IDYES;
+        }
+        std::wstring dll = ini_str(folder + L"\\mod.ini", L"mod", L"dll");
+        if (go && !dll.empty()) {
+            go = MessageBoxW(g_wnd, (L"'" + id + L"' contains a program (" + dll + L") that will run inside the game with full access to your account and files.\n\n"
+                                     L"Mods added from a file aren't checked by SWML. Only continue if you trust where this one came from.\n\nInstall it?").c_str(),
+                             L"Add mod", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
         }
         if (go && _wcsicmp(folder.c_str(), target.c_str()) != 0) {
             std::wstring why;
@@ -542,6 +594,96 @@ void tool_action(int action) {
     load_mods(); fill_list();
 }
 
+void set_update_status(const std::wstring& text) { SetWindowTextW(g_update_status, text.c_str()); }
+
+void post_result(HWND window, std::unique_ptr<WorkResult> result)
+{
+    if (PostMessageW(window, WM_SWML_WORK_DONE, 0, reinterpret_cast<LPARAM>(result.get()))) result.release();
+}
+
+void start_update_check()
+{
+    if (g_checking || g_installing) return;
+    g_checking = true;
+    refresh_buttons();
+    set_update_status(L"Checking for updates...");
+    std::thread([window = g_wnd] {
+        auto result = std::make_unique<WorkResult>();
+        result->check = true;
+        result->have_index = swml_updates::fetch_index(result->index, result->error);
+        post_result(window, std::move(result));
+    }).detach();
+}
+
+void start_updates(std::vector<swml_updates::Entry> entries)
+{
+    if (g_installing || entries.empty()) return;
+    g_installing = true;
+    refresh_buttons();
+    set_update_status(L"Updating " + std::to_wstring(entries.size()) + (entries.size() == 1 ? L" mod..." : L" mods..."));
+    std::thread([window = g_wnd, root = g_root, entries = std::move(entries)] {
+        auto result = std::make_unique<WorkResult>();
+        for (const auto& entry : entries) {
+            std::wstring error;
+            if (swml_updates::update_mod(root, entry, error)) ++result->updated;
+            else result->failures += swml_manifest::wide(entry.id) + L": " + error + L"\n";
+        }
+        post_result(window, std::move(result));
+    }).detach();
+}
+
+void selected_update()
+{
+    int i = selected();
+    if (i < 0 || !can_update(g_mods[i])) return;
+    start_updates({*offered_update(g_mods[i])});
+}
+
+void all_updates()
+{
+    std::vector<swml_updates::Entry> entries;
+    for (const Mod& m : g_mods) if (can_update(m)) entries.push_back(*offered_update(m));
+    start_updates(std::move(entries));
+}
+
+void show_loader_notice()
+{
+    bool show = g_have_index && swml_updates::newer(g_index.loader_version, SWML_SDK_VERSION);
+    HWND notice = GetDlgItem(g_wnd, IDC_LOADER_NOTICE);
+    if (show) SetWindowTextW(notice, (L"SWML " + swml_manifest::wide(g_index.loader_version) + L" available").c_str());
+    ShowWindow(notice, show ? SW_SHOW : SW_HIDE);
+}
+
+void work_finished(std::unique_ptr<WorkResult> result)
+{
+    int i = selected();
+    std::wstring keep = i >= 0 ? g_mods[i].id : L"";
+    if (result->check) {
+        g_checking = false;
+        if (!result->have_index) {
+            log_launch(L"update check failed: %ls", result->error.c_str());
+            set_update_status(L"Could not check for updates: " + result->error);
+            refresh_buttons();
+            return;
+        }
+        g_index = std::move(result->index);
+        g_have_index = true;
+        show_loader_notice();
+        fill_list(keep);
+        auto count = std::count_if(g_mods.begin(), g_mods.end(), can_update);
+        set_update_status(count ? std::to_wstring(count) + (count == 1 ? L" update available." : L" updates available.") : L"Mods are up to date.");
+        return;
+    }
+    g_installing = false;
+    load_mods();
+    fill_list(keep);
+    set_update_status(L"Updated " + std::to_wstring(result->updated) + (result->updated == 1 ? L" mod." : L" mods."));
+    if (!result->failures.empty()) {
+        log_launch(L"update failed: %ls", result->failures.c_str());
+        MessageBoxW(g_wnd, (L"These mods were not updated and are unchanged:\n\n" + result->failures).c_str(), L"Mod update failed", MB_ICONERROR);
+    }
+}
+
 void copy_launch_option()
 {
     std::wstring opt = L"\"" + g_root + L"\\swml.exe\" %command%";
@@ -598,7 +740,7 @@ LRESULT CALLBACK wnd_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 if (on != m.enabled) {
                     set_enabled(m, on);
                     std::wstring st = status_word(m);
-                    ListView_SetItemText(g_list, nm->iItem, 1, const_cast<wchar_t*>(st.c_str()));
+                    ListView_SetItemText(g_list, nm->iItem, 2, const_cast<wchar_t*>(st.c_str()));
                 }
             }
             if ((nm->uChanged & LVIF_STATE) && ((nm->uNewState ^ nm->uOldState) & LVIS_SELECTED)) show_details();
@@ -609,6 +751,10 @@ LRESULT CALLBACK wnd_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         switch (LOWORD(wp)) {
         case IDC_DOCTOR: case IDC_ROLLBACK:
             tool_action(LOWORD(wp)); break;
+        case IDC_CHECK_UPDATES: start_update_check(); break;
+        case IDC_UPDATE: selected_update(); break;
+        case IDC_UPDATE_ALL: all_updates(); break;
+        case IDC_LOADER_NOTICE: ShellExecuteW(w, L"open", swml_manifest::wide(g_index.loader_url).c_str(), nullptr, nullptr, SW_SHOWNORMAL); break;
         case IDC_ADD: add_mod(); break;
         case IDC_REMOVE: remove_mod(); break;
         case IDC_FOLDER: {
@@ -642,6 +788,12 @@ LRESULT CALLBACK wnd_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             SetBkColor(reinterpret_cast<HDC>(wp), GetSysColor(COLOR_WINDOW));
             return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
         }
+        break;
+    case WM_SWML_WORK_DONE:
+        work_finished(std::unique_ptr<WorkResult>(reinterpret_cast<WorkResult*>(lp)));
+        return 0;
+    case WM_CLOSE:
+        if (g_installing) { set_update_status(L"Wait for the update to finish."); return 0; }
         break;
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -677,17 +829,24 @@ void create_window(HINSTANCE inst)
     LVCOLUMNW col{};
     col.mask = LVCF_TEXT | LVCF_WIDTH;
     col.pszText = const_cast<wchar_t*>(L"Mod");
-    col.cx = S(210);
+    col.cx = S(190);
     ListView_InsertColumn(g_list, 0, &col);
+    col.pszText = const_cast<wchar_t*>(L"Version");
+    col.cx = S(110);
+    ListView_InsertColumn(g_list, 1, &col);
     col.pszText = const_cast<wchar_t*>(L"Last run");
     col.cx = S(70);
-    ListView_InsertColumn(g_list, 1, &col);
+    ListView_InsertColumn(g_list, 2, &col);
 
     g_details = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                                 0, 0, 10, 10, g_wnd, reinterpret_cast<HMENU>(IDC_DETAILS), inst, nullptr);
     SendMessageW(g_details, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
 
     button(L"Diagnostics",IDC_DOCTOR); button(L"Roll back mod",IDC_ROLLBACK);
+    button(L"Check for updates",IDC_CHECK_UPDATES); button(L"Update mod",IDC_UPDATE); button(L"Update all",IDC_UPDATE_ALL);
+    ShowWindow(button(L"",IDC_LOADER_NOTICE),SW_HIDE);
+    g_update_status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_NOPREFIX | SS_ENDELLIPSIS, 0, 0, 10, 10, g_wnd, reinterpret_cast<HMENU>(IDC_UPDATE_STATUS), inst, nullptr);
+    SendMessageW(g_update_status, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
 
     button(L"Add mod...", IDC_ADD);
     button(L"Remove", IDC_REMOVE);
@@ -712,6 +871,7 @@ void create_window(HINSTANCE inst)
     RedrawWindow(g_wnd,nullptr,nullptr,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);
     SetForegroundWindow(g_wnd);
     SetFocus(play);
+    if (GetPrivateProfileIntW(L"updates", L"check", 1, g_ini.c_str())) start_update_check();
 }
 
 // Everything after our own exe path on the command line = the game's command line from Steam.
