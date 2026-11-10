@@ -48,6 +48,7 @@ add_executable(swml WIN32
   launcher/main.cpp
   launcher/zip.cpp
   launcher/management.cpp
+  launcher/updates.cpp
   launcher/field_dialog.cpp
   launcher/settings_editor.cpp)
 target_include_directories(swml PRIVATE sdk)
