@@ -10,7 +10,7 @@
 struct swml_mod {
     std::string id;
     std::wstring dir;      // %LOCALAPPDATA%\swml\mods\<id>
-    std::wstring settings; // <dir>\settings.ini
+    std::wstring settings; // generated defaults + sparse overrides; not user-owned
     HMODULE module = nullptr;
     bool operational = false;
     uintptr_t image_begin = 0, image_end = 0;
