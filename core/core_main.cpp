@@ -427,6 +427,11 @@ DWORD WINAPI init_thread(void*)
     int running = 0;
     for (auto* m : g_mods) running += m->module && !m->hooks.empty();
     corelog("start-up done: %zu mods found, %d running with hooks", g_mods.size(), running);
+#ifdef SWML_STARTUP_LOADER
+    wchar_t event_name[256]{};
+    DWORD n=GetEnvironmentVariableW(L"SWML_READY_EVENT",event_name,256);
+    if(n&&n<256)if(HANDLE event=OpenEventW(EVENT_MODIFY_STATE,FALSE,event_name)){SetEvent(event);CloseHandle(event);}
+#endif
     return 0;
 }
 
@@ -508,7 +513,19 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = module;
         DisableThreadLibraryCalls(module);
+#ifndef SWML_STARTUP_LOADER
         if (HANDLE t = CreateThread(nullptr, 0, init_thread, nullptr, 0, nullptr)) CloseHandle(t);
+#endif
     }
     return TRUE;
 }
+#ifdef SWML_STARTUP_LOADER
+extern "C" __declspec(dllexport) BOOL WINAPI swml_bootstrap_start_v1(uint32_t version)
+{
+    static volatile LONG started=0;
+    if(version!=1||!g_self)return FALSE;
+    if(InterlockedCompareExchange(&started,1,0)!=0)return TRUE;
+    HANDLE worker=CreateThread(nullptr,0,init_thread,nullptr,0,nullptr);
+    if(!worker){InterlockedExchange(&started,0);return FALSE;}CloseHandle(worker);return TRUE;
+}
+#endif

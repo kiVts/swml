@@ -16,6 +16,9 @@
 #include "mod_manifest.h"
 #include "updates.h"
 #include "swml_v2.h"
+#ifdef SWML_STARTUP_LOADER
+#include "../bootstrap/launch.h"
+#endif
 
 #include <windows.h>
 #include <commctrl.h>
@@ -166,6 +169,7 @@ void sync_game_data(bool with_mods)
 }
 
 // --- game launch -----------------------------------------------------------------------------------
+#ifndef SWML_STARTUP_LOADER
 bool has_module(DWORD pid, const wchar_t* name)
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
@@ -197,6 +201,7 @@ bool inject(HANDLE proc, const std::wstring& dll)
     if (remote) VirtualFreeEx(proc, remote, 0, MEM_RELEASE);
     return ok;
 }
+#endif
 
 // First token of a command line (the game exe) -> its folder.
 std::wstring exe_dir_of(const std::wstring& cmd)
@@ -234,12 +239,36 @@ void log_launch(const wchar_t* fmt, ...)
 // Returns the process exit code, or -1 if the game couldn't be started.
 int run_game(bool with_mods, HWND wnd)
 {
+#ifdef SWML_STARTUP_LOADER
+    with_mods=with_mods&&swml_bootstrap::environment(L"SWML_OFF")!=L"1";
+    int game_argc=0;auto game_argv=CommandLineToArgvW(g_game_cmd.c_str(),&game_argc);
+    bool supported_client=game_argv&&game_argc>0&&!_wcsicmp(std::filesystem::path(game_argv[0]).filename().c_str(),L"stormworks64.exe");
+    if(game_argv)LocalFree(game_argv);
+    if(with_mods&&!supported_client){MessageBoxW(wnd,L"Choose the Stormworks 64-bit client.",L"SWML startup loader",MB_ICONERROR);return -1;}
+    const auto game_dir=exe_dir_of(g_game_cmd);
+    if(with_mods&&(!swml_bootstrap::exported(game_dir+L"\\opengl32.dll","swml_bootstrap_version")||
+                  !swml_bootstrap::exported(g_root+L"\\swml_core.dll","swml_bootstrap_start_v1"))){
+        MessageBoxW(wnd,L"The matching startup loader is not installed. Run install.bat from the extracted SWML release and select this game's folder.",L"SWML startup loader",MB_ICONERROR);return -1;
+    }
+    GUID guid{};if(FAILED(CoCreateGuid(&guid)))return -1;wchar_t guid_text[64]{};StringFromGUID2(guid,guid_text,64);
+    std::wstring event_name=L"Local\\SWML-startup-"+std::wstring(guid_text);
+    struct Event {HANDLE handle{};~Event(){if(handle)CloseHandle(handle);}} ready_event;
+    if(with_mods){ready_event.handle=CreateEventW(nullptr,TRUE,FALSE,event_name.c_str());if(!ready_event.handle)return -1;}
+    std::vector<wchar_t> child;
+    try {child=swml_bootstrap::child_environment(g_root,with_mods,event_name);}catch(...){MessageBoxW(wnd,L"Could not prepare the game's startup settings.",L"SWML",MB_ICONERROR);return -1;}
+#endif
     sync_game_data(with_mods);
     std::wstring cmd = g_game_cmd, dir = exe_dir_of(g_game_cmd);
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     log_launch(L"starting (%ls): %ls", with_mods ? L"with mods" : L"without mods", cmd.c_str());
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.empty() ? nullptr : dir.c_str(), &si, &pi)) {
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+#ifdef SWML_STARTUP_LOADER
+        CREATE_UNICODE_ENVIRONMENT,child.data(),
+#else
+        0,nullptr,
+#endif
+        dir.empty() ? nullptr : dir.c_str(), &si, &pi)) {
         DWORD e = GetLastError();
         log_launch(L"could not start the game: error %lu", e);
         wchar_t msg[512];
@@ -249,6 +278,12 @@ int run_game(bool with_mods, HWND wnd)
     }
     if (wnd) ShowWindow(wnd, SW_HIDE);
     if (with_mods) {
+#ifdef SWML_STARTUP_LOADER
+        HANDLE waiting[]={ready_event.handle,pi.hProcess};DWORD result=WaitForMultipleObjects(2,waiting,FALSE,30000);
+        if(result==WAIT_OBJECT_0)log_launch(L"startup core ready (in-process bootstrap)");
+        else if(result==WAIT_OBJECT_0+1)log_launch(L"game exited before startup core became ready");
+        else {log_launch(L"startup core did not report ready; inspect bootstrap.log and swml.log");MessageBoxW(wnd,L"The game started, but SWML did not report ready. Check bootstrap.log and swml.log. No injection fallback was attempted.",L"SWML startup loader",MB_ICONWARNING);}
+#else
         std::wstring core = g_root + L"\\swml_core.dll";
         // Wait for the renderer, like swinject --launch: early enough for every mod, after the CRT,
         // Steam and the window exist.
@@ -263,6 +298,7 @@ int run_game(bool with_mods, HWND wnd)
         } else {
             log_launch(L"game exited or never initialised OpenGL; mods not loaded");
         }
+#endif
     }
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 0;
@@ -277,7 +313,7 @@ int run_game(bool with_mods, HWND wnd)
 enum {
     IDC_LIST = 100, IDC_DETAILS, IDC_ADD, IDC_REMOVE, IDC_FOLDER, IDC_SETTINGS, IDC_LOGS, IDC_PLAY, IDC_PLAY_VANILLA, IDC_COPY,
     IDC_HINT,
-    IDC_DOCTOR, IDC_ROLLBACK,
+    IDC_DOCTOR,
     IDC_CHECK_UPDATES, IDC_UPDATE, IDC_UPDATE_ALL, IDC_LOADER_NOTICE, IDC_UPDATE_STATUS,
 };
 
@@ -344,7 +380,7 @@ void refresh_buttons()
     auto enable = [](int id, bool on) { EnableWindow(GetDlgItem(g_wnd, id), on); };
     for (int id : {IDC_REMOVE, IDC_SETTINGS}) enable(id, i >= 0 && idle);
     enable(IDC_FOLDER, i >= 0);
-    for (int id : {IDC_ADD, IDC_ROLLBACK}) enable(id, idle);
+    for (int id : {IDC_ADD}) enable(id, idle);
     enable(IDC_CHECK_UPDATES, idle && !g_checking);
     enable(IDC_UPDATE, idle && i >= 0 && can_update(g_mods[i]));
     enable(IDC_UPDATE_ALL, idle && any);
@@ -443,7 +479,7 @@ void layout()
     MoveWindow(g_details,right_x,top+header,right_width,std::max(1,right_height-header),TRUE);
     MoveWindow(g_settings_panel,right_x,top+header,right_width,std::max(1,right_height-header),TRUE);
     int tool_x=m;
-    const std::pair<int,int> tools[]={{IDC_DOCTOR,108},{IDC_ROLLBACK,108},{IDC_CHECK_UPDATES,130},{IDC_UPDATE,100},{IDC_UPDATE_ALL,90}};
+    const std::pair<int,int> tools[]={{IDC_DOCTOR,108},{IDC_CHECK_UPDATES,130},{IDC_UPDATE,100},{IDC_UPDATE_ALL,90}};
     for (auto [control,width] : tools) {
         MoveWindow(GetDlgItem(g_wnd,control),tool_x,m,S(width),bh,TRUE); tool_x+=S(width+6);
     }
@@ -535,7 +571,7 @@ void add_mod()
         std::wstring target = g_mods_dir + L"\\" + id;
         bool go = true;
         if (exists(target)) {
-            go = MessageBoxW(g_wnd, (L"Update mod '" + id + L"'? Settings and saved mod data are preserved. The previous installation remains available through Roll back.").c_str(),
+            go = MessageBoxW(g_wnd, (L"Update mod '" + id + L"'? Settings and saved mod data are preserved.").c_str(),
                              L"Add mod", MB_YESNO | MB_ICONQUESTION) == IDYES;
         }
         std::wstring dll = ini_str(folder + L"\\mod.ini", L"mod", L"dll");
@@ -586,10 +622,7 @@ void tool_action(int action) {
     if (action==IDC_DOCTOR) {
         auto path=g_root+L"\\logs\\doctor.json";
         if (swml_manager::doctor(g_root,path,error)) ShellExecuteW(g_wnd,L"open",L"notepad.exe",(L"\""+path+L"\"").c_str(),nullptr,SW_SHOWNORMAL);
-    } else if (action==IDC_ROLLBACK) {
-        auto index=selected(); if (index<0) return;
-        if (MessageBoxW(g_wnd,L"Restore the previous mod installation? Current settings and saved mod data will be preserved.",L"Roll back mod",MB_YESNO|MB_ICONQUESTION)!=IDYES) return;
-        swml_manager::rollback(g_root,g_mods[index].id,error);
+
     }
     if (!error.empty()) MessageBoxW(g_wnd,error.c_str(),L"SWML",MB_ICONERROR);
     load_mods(); fill_list();
@@ -751,7 +784,7 @@ LRESULT CALLBACK wnd_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_COMMAND:
         switch (LOWORD(wp)) {
-        case IDC_DOCTOR: case IDC_ROLLBACK:
+        case IDC_DOCTOR:
             tool_action(LOWORD(wp)); break;
         case IDC_CHECK_UPDATES: start_update_check(); break;
         case IDC_UPDATE: selected_update(); break;
@@ -822,7 +855,8 @@ void create_window(HINSTANCE inst)
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
     g_font = CreateFontIndirectW(&ncm.lfMessageFont);
 
-    g_wnd = CreateWindowW(L"swml_window", L"Stormworks Mod Loader", WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, S(960), S(600),
+    const wchar_t* window_title=L"Stormworks Mod Loader";
+    g_wnd = CreateWindowW(L"swml_window",window_title,WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, S(960), S(600),
                           nullptr, nullptr, inst, nullptr);
     g_list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
                              0, 0, 10, 10, g_wnd, reinterpret_cast<HMENU>(IDC_LIST), inst, nullptr);
@@ -848,7 +882,7 @@ void create_window(HINSTANCE inst)
                                 0, 0, 10, 10, g_wnd, reinterpret_cast<HMENU>(IDC_DETAILS), inst, nullptr);
     SendMessageW(g_details, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
 
-    button(L"Diagnostics",IDC_DOCTOR); button(L"Roll back mod",IDC_ROLLBACK);
+    button(L"Diagnostics",IDC_DOCTOR);
     button(L"Check for updates",IDC_CHECK_UPDATES); button(L"Update mod",IDC_UPDATE); button(L"Update all",IDC_UPDATE_ALL);
     ShowWindow(button(L"",IDC_LOADER_NOTICE),SW_HIDE);
     g_update_status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_NOPREFIX | SS_ENDELLIPSIS, 0, 0, 10, 10, g_wnd, reinterpret_cast<HMENU>(IDC_UPDATE_STATUS), inst, nullptr);
