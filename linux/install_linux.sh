@@ -48,7 +48,7 @@ mkdir -p "$DEST/logs"
     ./logs/* | ./backups/* | ./staging/* | ./mods/*/data/*) continue ;;
     esac
     case $(basename "$f") in
-    swml.ini | settings.ini | status.ini) [ -e "$DEST/$f" ] && continue ;;
+    swml.ini | settings.ini | settings.overrides.ini | status.ini) [ -e "$DEST/$f" ] && continue ;;
     esac
     mkdir -p "$DEST/$(dirname "$f")"
     # Publish a completed file instead of rewriting an inode mapped by Wine.

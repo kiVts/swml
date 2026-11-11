@@ -89,7 +89,7 @@ void copy_tree(const fs::path& source, const fs::path& target) {
     }
 }
 void preserve(const fs::path& old, const fs::path& staged) {
-    for (auto name : {L"settings.ini", L"status.ini"})
+    for (auto name : {L"settings.ini", L"settings.overrides.ini", L"status.ini"})
         if (fs::is_regular_file(old/name)) fs::copy_file(old/name, staged/name, fs::copy_options::overwrite_existing);
     if (fs::is_directory(old/"data")) { if (fs::exists(staged/"data")) remove_owned(staged, staged/"data"); copy_tree(old/"data", staged/"data"); }
 }
@@ -114,6 +114,8 @@ bool install(const std::wstring& root, const std::wstring& source, const std::ws
                     throw std::runtime_error("mod DLL must be a Windows x64 DLL");
             }
             if (fs::exists(data/"settings.schema.json")) swml_settings::parse(swml_json::parse(bytes(data/"settings.schema.json",65535)));
+            // Packages carry defaults, never the developer's local overrides/cache.
+            for(auto file:{L"settings.overrides.ini",L".settings.effective.ini"})if(fs::exists(data/file))remove_owned(data,data/file);
             if (fs::exists(target)) {
                 preserve(target,data); fs::create_directories(backup.parent_path());
                 if (fs::exists(backup)) remove_owned(backup.parent_path(),backup);

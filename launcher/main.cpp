@@ -12,6 +12,7 @@
 #include "management.h"
 #include "field_dialog.h"
 #include "settings_editor.h"
+#include "settings_panel.h"
 #include "mod_manifest.h"
 #include "updates.h"
 #include "swml_v2.h"
@@ -292,7 +293,8 @@ swml_updates::Index g_index;
 bool g_have_index = false, g_checking = false, g_installing = false;
 HWND g_update_status;
 
-HWND g_wnd, g_list, g_details, g_hint;
+HWND g_wnd, g_list, g_details, g_hint,g_detail_tabs,g_settings_panel;
+std::wstring g_panel_directory,g_panel_version;
 HWND g_buttons[9];
 HFONT g_font, g_bold;
 int g_dpi = 96;
@@ -381,6 +383,9 @@ void show_details()
         t += out;
     }
     SetWindowTextW(g_details, t.c_str());
+    auto panel_directory=selected()>=0?g_mods[selected()].dir:std::wstring{};
+    auto panel_version=selected()>=0?g_mods[selected()].version:std::wstring{};
+    if(panel_directory!=g_panel_directory||panel_version!=g_panel_version){g_panel_directory=panel_directory;g_panel_version=panel_version;select_settings_panel(g_settings_panel,panel_directory);}
     refresh_buttons();
 }
 
@@ -433,7 +438,10 @@ void layout()
     int bottom = h - m - bh;
     const int top=S(48);
     MoveWindow(g_list, m, top, list_w, bottom - m - bh - top, TRUE);
-    MoveWindow(g_details, 2 * m + list_w, top, w - 3 * m - list_w, bottom - m - bh - top, TRUE);
+    int right_x=2*m+list_w,right_width=w-3*m-list_w,header=S(30),right_height=bottom-m-bh-top;
+    MoveWindow(g_detail_tabs,right_x,top,right_width,header,TRUE);
+    MoveWindow(g_details,right_x,top+header,right_width,std::max(1,right_height-header),TRUE);
+    MoveWindow(g_settings_panel,right_x,top+header,right_width,std::max(1,right_height-header),TRUE);
     int tool_x=m;
     const std::pair<int,int> tools[]={{IDC_DOCTOR,108},{IDC_ROLLBACK,108},{IDC_CHECK_UPDATES,130},{IDC_UPDATE,100},{IDC_UPDATE_ALL,90}};
     for (auto [control,width] : tools) {
@@ -569,15 +577,8 @@ void open_settings()
 {
     int i = selected();
     if (i < 0) return;
-    const Mod& m = g_mods[i];
-    std::wstring s = m.dir + L"\\settings.ini", d = m.dir + L"\\settings.default.ini";
-    if (edit_schema_settings(g_wnd,m.dir+L"\\settings.schema.json",s)) return;
-    if (!exists(s) && exists(d)) CopyFileW(d.c_str(), s.c_str(), TRUE);
-    if (!exists(s)) {
-        MessageBoxW(g_wnd, L"This mod has no settings.", L"Settings", MB_ICONINFORMATION);
-        return;
-    }
-    ShellExecuteW(g_wnd, L"open", L"notepad.exe", (L"\"" + s + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+    select_settings_panel(g_settings_panel,g_mods[i].dir);
+    TabCtrl_SetCurSel(g_detail_tabs,1);ShowWindow(g_details,SW_HIDE);ShowWindow(g_settings_panel,SW_SHOW);
 }
 
 void tool_action(int action) {
@@ -732,6 +733,7 @@ LRESULT CALLBACK wnd_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_NOTIFY: {
         auto* hdr = reinterpret_cast<NMHDR*>(lp);
+        if(hdr->hwndFrom==g_detail_tabs && hdr->code==TCN_SELCHANGE){bool settings=TabCtrl_GetCurSel(g_detail_tabs)==1;ShowWindow(g_details,settings?SW_HIDE:SW_SHOW);ShowWindow(g_settings_panel,settings?SW_SHOW:SW_HIDE);return 0;}
         if (hdr->idFrom == IDC_LIST && hdr->code == LVN_ITEMCHANGED && !g_filling) {
             auto* nm = reinterpret_cast<NMLISTVIEW*>(lp);
             if ((nm->uChanged & LVIF_STATE) && ((nm->uNewState ^ nm->uOldState) & LVIS_STATEIMAGEMASK)) {
@@ -838,6 +840,10 @@ void create_window(HINSTANCE inst)
     col.cx = S(70);
     ListView_InsertColumn(g_list, 2, &col);
 
+    g_detail_tabs=CreateWindowW(WC_TABCONTROLW,L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP,0,0,10,10,g_wnd,nullptr,inst,nullptr);
+    SendMessageW(g_detail_tabs,WM_SETFONT,reinterpret_cast<WPARAM>(g_font),TRUE);
+    TCITEMW detail_tab{};detail_tab.mask=TCIF_TEXT;detail_tab.pszText=const_cast<wchar_t*>(L"About");TabCtrl_InsertItem(g_detail_tabs,0,&detail_tab);detail_tab.pszText=const_cast<wchar_t*>(L"Settings");TabCtrl_InsertItem(g_detail_tabs,1,&detail_tab);
+    g_settings_panel=create_settings_panel(g_wnd,g_font);
     g_details = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                                 0, 0, 10, 10, g_wnd, reinterpret_cast<HMENU>(IDC_DETAILS), inst, nullptr);
     SendMessageW(g_details, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
@@ -894,7 +900,7 @@ std::wstring game_command_line()
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES};
+    INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
 
     wchar_t self[MAX_PATH];

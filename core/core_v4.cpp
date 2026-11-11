@@ -3,6 +3,7 @@
 #include "core_v4.h"
 #include "mod_manifest.h"
 #include "settings_schema.h"
+#include "settings_store.h"
 #include "content_schema.h"
 #include "native_ui.h"
 #include "world_context.h"
@@ -105,7 +106,8 @@ swml_result setting_set(swml_mod* mod,const char* id,const char* json) {
             if(found->authority=="host"&&!host_settings_allowed(mod))return SWML_DENIED;
             if(swml_json::dump(owner->second.settings.at(id))==swml_json::dump(value))return SWML_OK;
             auto section=swml_manifest::wide(found->section), key=swml_manifest::wide(found->key),encoded=swml_manifest::wide(swml_settings::encode(*found,value));
-            if(!WritePrivateProfileStringW(section.c_str(),key.c_str(),encoded.c_str(),mod->settings.c_str()))return SWML_IO_ERROR;
+            auto initial=swml_manifest::wide(swml_settings::encode(*found,found->initial));
+            try {swml_settings_store::set(mod->dir,section,key,encoded,&initial);}catch(...){return SWML_IO_ERROR;}
             event=swml_json::dump(Value::Object{{"id",id},{"previous",owner->second.settings.at(id)},{"value",value},{"restart",found->restart}});
             owner->second.settings[id]=std::move(value);
             if(found->type=="keybind"&&found->section=="input")sdk_input::setting_changed(mod,found->key.c_str(),owner->second.settings[id].string().c_str());
@@ -121,7 +123,7 @@ swml_result settings_reload(swml_mod* mod) {
             std::lock_guard lock(mutex);auto owner=owners.find(mod);if(owner==owners.end())return SWML_DENIED;
             if(owner->second.schema.empty())return SWML_NOT_FOUND;
             std::map<std::string,Value> next;
-            WritePrivateProfileStringW(nullptr,nullptr,nullptr,mod->settings.c_str());
+            swml_settings_store::prepare(mod->dir);
             for(const auto& item:owner->second.fields)next.emplace(item.id,read_setting(mod,item));
             for(const auto& item:owner->second.fields)if(swml_json::dump(next.at(item.id))!=swml_json::dump(owner->second.settings.at(item.id))) {
                 if(item.authority=="host"&&!host_settings_allowed(mod))return SWML_DENIED;

@@ -50,7 +50,8 @@ add_executable(swml WIN32
   launcher/management.cpp
   launcher/updates.cpp
   launcher/field_dialog.cpp
-  launcher/settings_editor.cpp)
+  launcher/settings_editor.cpp
+  launcher/settings_panel.cpp)
 target_include_directories(swml PRIVATE sdk)
 target_link_libraries(swml PRIVATE libdeflate_static)
 target_compile_definitions(swml PRIVATE ${SWML_DEFS})

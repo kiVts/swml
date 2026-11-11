@@ -7,6 +7,7 @@
 // Logs: logs\swml.log is the loader's own; each enabled mod with a DLL writes logs\mods\<id>.log. Five sessions each.
 
 #include "core.h"
+#include "settings_store.h"
 #include "core_v2.h"
 #include "core_v3.h"
 #include "core_v4.h"
@@ -215,9 +216,7 @@ void game_init()
 
 void ensure_settings(swml_mod* m)
 {
-    if (GetFileAttributesW(m->settings.c_str()) != INVALID_FILE_ATTRIBUTES) return;
-    std::wstring def = m->dir + L"\\settings.default.ini";
-    if (GetFileAttributesW(def.c_str()) != INVALID_FILE_ATTRIBUTES) CopyFileW(def.c_str(), m->settings.c_str(), TRUE);
+    swml_settings_store::prepare(m->dir);
 }
 
 bool mod_enabled(const std::wstring& id, const std::wstring& manifest)
@@ -307,7 +306,7 @@ void load_mods()
         auto* m = new swml_mod();
         m->id = narrow(id);
         m->dir = dir;
-        m->settings = dir + L"\\settings.ini";
+        m->settings = swml_settings_store::effective(dir);
         g_mods.push_back(m);
         if (!mod_enabled(id, manifest)) {
             m->status = "disabled";
@@ -345,7 +344,9 @@ void load_mods()
             core_write_status(m);
             continue;
         }
-        ensure_settings(m);
+        try {ensure_settings(m);} catch(const std::exception& error) {
+            m->status=std::string("failed: settings: ")+error.what();core_write_status(m);continue;
+        }
         open_mod_log(m, id);
         HMODULE mod = LoadLibraryExW((dir + L"\\" + dll).c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (!mod) {

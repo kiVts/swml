@@ -17,7 +17,8 @@ enum {
     /* Labels created with height=0 use native wrapped-content height. */
     SWML_V3_CAP_UI_TEXT_AUTO_HEIGHT = 1ull << 5,
     /* Button bounds resize their native background geometry as well as captions. */
-    SWML_V3_CAP_UI_BUTTON_RESIZE = 1ull << 6
+    SWML_V3_CAP_UI_BUTTON_RESIZE = 1ull << 6,
+    SWML_V3_CAP_UI_STATIC_TEXT_OBSERVER = 1ull << 7
 };
 enum { SWML_UI_CONTAINER = 1, SWML_UI_LABEL = 2, SWML_UI_BUTTON = 3 };
 enum { SWML_UI_MOUNT = 1, SWML_UI_UPDATE = 2, SWML_UI_CLICK = 3, SWML_UI_UNMOUNT = 4 };
@@ -81,7 +82,8 @@ struct swml_api_v3 {
     swml_result (*ui_set_text)(swml_mod*, swml_ui_handle, const char*);
     swml_result (*ui_get_text)(swml_mod*, swml_ui_handle, char*, uint32_t capacity, uint32_t* needed);
     /* Optional: match the native root's initial bounds before allocating handles.
-     * Nonmatching generic composites consume no root slots. Later edits do not unmount. */
+       * Nonmatching generic composites consume no root slots. Later edits do not unmount.
+       * With STATIC_TEXT_OBSERVER, height=-1 matches any measured height; other bounds remain exact. */
     swml_result (*ui_watch_rect)(swml_mod*, const char* native_class, const swml_ui_rect*, swml_ui_callback, void*, swml_handle*);
 };
 #define SWML_V3_BASE_SIZE ((uint32_t)offsetof(swml_api_v3, ui_watch_rect))

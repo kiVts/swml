@@ -58,6 +58,12 @@ Container container_ctor; Text text_ctor; Button button_ctor; Attach attach_chil
 SetText set_text_native; LayoutText layout_text;
 ResizeButton resize_button;
 Update original_update; Destroy original_destroy; Press original_press;
+using TextDraw=void(*)(void*,uintptr_t,uintptr_t,uintptr_t,float,float);
+TextDraw original_text_draw;
+TextDraw original_base_text_draw;
+SetText set_base_text;
+using BaseTextDelete=void*(*)(void*,uint64_t);
+BaseTextDelete original_base_text_delete;
 uintptr_t container_table = 0;
 std::mutex init_mutex;
 std::atomic<bool> ready{false};
@@ -92,6 +98,18 @@ uintptr_t relative_call(uintptr_t at) {
 }
 void update_hook(void* object, uintptr_t traversal, uintptr_t application) {
     native_ui_update(original_update, object, traversal, application, sdk_input::native_observe, sdk_ui::update);
+}
+void text_draw_hook(void* object,uintptr_t traversal,uintptr_t application,uintptr_t draw,float x,float y) {
+    sdk_ui::update(object,application);
+    original_text_draw(object,traversal,application,draw,x,y);
+}
+void base_text_draw_hook(void* object,uintptr_t traversal,uintptr_t application,uintptr_t draw,float x,float y) {
+    sdk_ui::update(object,application);
+    original_base_text_draw(object,traversal,application,draw,x,y);
+}
+void* base_text_delete_hook(void* object,uint64_t flags) {
+    sdk_ui::deleting(object);
+    return original_base_text_delete(object,flags);
 }
 void destroy_hook(void* object) {
     sdk_input::native_forget(object);
@@ -142,11 +160,18 @@ bool enable() {
     button_ctor = reinterpret_cast<Button>(functions["button_ctor"]);
     attach_child = reinterpret_cast<Attach>(functions["attach"]);
     set_text_native = reinterpret_cast<SetText>(functions["set_text"]);
+    set_base_text = reinterpret_cast<SetText>(functions["base_text_set"]);
     layout_text = reinterpret_cast<LayoutText>(functions["layout_text"]);
     resize_button = reinterpret_cast<ResizeButton>(functions["button_resize"]);
     // Install only after every binding/layout contract passed. Shared hook chains preserve mods.
     bool okay = core_internal_hook(reinterpret_cast<void*>(functions["update"]), reinterpret_cast<void*>(update_hook),
                                     reinterpret_cast<void**>(&original_update), "SDK native UI update") &&
+                core_internal_hook(reinterpret_cast<void*>(functions["text_draw"]),reinterpret_cast<void*>(text_draw_hook),
+                                    reinterpret_cast<void**>(&original_text_draw),"SDK static text observation") &&
+                core_internal_hook(reinterpret_cast<void*>(functions["base_text_draw"]),reinterpret_cast<void*>(base_text_draw_hook),
+                                    reinterpret_cast<void**>(&original_base_text_draw),"SDK base static text observation") &&
+                core_internal_hook(reinterpret_cast<void*>(functions["base_text_delete"]),reinterpret_cast<void*>(base_text_delete_hook),
+                                    reinterpret_cast<void**>(&original_base_text_delete),"SDK base text lifetime") &&
                 core_internal_hook(reinterpret_cast<void*>(functions["destroy"]), reinterpret_cast<void*>(destroy_hook),
                                     reinterpret_cast<void**>(&original_destroy), "SDK native UI destruction") &&
                 core_internal_hook(reinterpret_cast<void*>(functions["button_press"]), reinterpret_cast<void*>(press_hook),
@@ -294,7 +319,7 @@ void erase(void* object, uintptr_t game, void* known_parent) {
 }
 swml_ui_info inspect(void* p) {
     swml_ui_info info{}; info.size = sizeof(info);
-    info.kind = is_a(p, "c_ui_element_text") ? SWML_UI_LABEL :
+    info.kind = (is_a(p, "c_ui_element_text") || is_a(p,"mm_ui_element_text")) ? SWML_UI_LABEL :
                 is_a(p, "c_ui_element_rectangle_button") ? SWML_UI_BUTTON : SWML_UI_CONTAINER;
     if(auto kind=control_kind(p))info.kind=kind;
     info.rect = {field<float>(p, 8), field<float>(p, 12), field<float>(p, 16), field<float>(p, 20), field<uint32_t>(p, 24)};
@@ -326,6 +351,7 @@ void enabled(void* p, bool value, uintptr_t game) {
     }
 }
 void* text_target(void* p) {
+    if (is_a(p,"mm_ui_element_text")) return p;
     if (is_a(p, "c_ui_element_text")) return p;
     if (is_a(p, "c_ui_element_rectangle_button"))
         for (auto* child : children(p)) if (is_a(child, "c_ui_element_text")) return child;
@@ -333,14 +359,14 @@ void* text_target(void* p) {
 }
 bool get_text(void* p, std::string& out) {
     p = text_target(p); if (!p) return false;
-    auto& s = field<String>(p, 0x58);
+    auto& s = field<String>(p, is_a(p,"mm_ui_element_text")?0x78:0x58);
     if (s.length > 16384 || (s.length && !s.data)) return false;
     out.assign(s.data ? s.data : "", s.length); return true;
 }
 void set_text(void* p, const std::string& value, uintptr_t game) {
     p = text_target(p); if (!p) return;
     String text{const_cast<char*>(value.c_str()), static_cast<uint32_t>(value.size()), static_cast<uint32_t>(value.size() + 1)};
-    set_text_native(p, game, &text); // setter copies; unlike the constructor it does not consume input
+    (is_a(p,"mm_ui_element_text")?set_base_text:set_text_native)(p, game, &text); // native setter copies and rebuilds geometry
 }
 const NativeUiBackend backend{enable, native_find_vtable, table, is_a, children, create, attach, erase,
                                inspect, rect, visible, enabled, get_text, set_text,

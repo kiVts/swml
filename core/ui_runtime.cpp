@@ -172,7 +172,8 @@ swml_result enable(swml_mod* m) {
 }
 swml_result watch_rect(swml_mod* m, const char* name, const swml_ui_rect* filter, swml_ui_callback callback, void* context, swml_handle* out) {
     if (out) *out = 0;
-    if (!out || !name || !*name || strnlen_s(name, 256) >= 256 || !callback || (filter && !valid_rect(*filter))) return SWML_INVALID;
+    auto checked=filter?*filter:swml_ui_rect{};if(checked.height==-1)checked.height=0;
+    if (!out || !name || !*name || strnlen_s(name, 256) >= 256 || !callback || (filter && !valid_rect(checked))) return SWML_INVALID;
     auto result = enable(m); if (result != SWML_OK) return result;
     uintptr_t table = backend().class_table(name); if (!table) return SWML_UNAVAILABLE;
     std::lock_guard lock(mutex);
@@ -362,7 +363,7 @@ void update(void* native, uintptr_t game) {
         if (!created.contains(native)) for (const auto& [id, w] : watches) if (w->active && w->table == backend().table(native)) {
             bool found = false; for (const auto& pair : callbacks) if (pair.first->watch == w) found = true;
             if (!found) {
-                if (w->filtered && !same_rect(backend().inspect(native).rect, w->filter)) continue;
+                if (w->filtered) {auto rect=backend().inspect(native).rect;auto filter=w->filter;if(filter.height==-1)filter.height=rect.height;if(!same_rect(rect,filter))continue;}
                 if (roots.size() >= 256) break;
                 auto root = std::make_shared<Root>(); root->id = next_id++; root->native = native; root->game = game; root->watch = w;
                 if (!bind(root, native)) break;

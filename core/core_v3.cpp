@@ -1,4 +1,5 @@
 #include "core.h"
+#include "settings_store.h"
 #include "health.h"
 #include "core_v2.h"
 #include "core_v3.h"
@@ -17,7 +18,7 @@ std::set<swml_mod*> owners;
 std::map<std::string, Command> commands;
 uint64_t capabilities() {
     return SWML_V3_CAP_COMMANDS | SWML_V3_CAP_SETTINGS_WRITE | SWML_V3_CAP_LOGGING | SWML_V3_CAP_UI_APPLICATION_CONTEXT |
-           SWML_V3_CAP_UI_TEXT_AUTO_HEIGHT | SWML_V3_CAP_UI_BUTTON_RESIZE |
+           SWML_V3_CAP_UI_TEXT_AUTO_HEIGHT | SWML_V3_CAP_UI_BUTTON_RESIZE | SWML_V3_CAP_UI_STATIC_TEXT_OBSERVER |
            (sdk_ui::enabled() ? uint64_t(SWML_V3_CAP_NATIVE_UI) : 0);
 }
 bool registered(swml_mod* m) { std::lock_guard lock(mutex); return owners.contains(m); }
@@ -57,7 +58,7 @@ swml_result setting_write(swml_mod* m, const wchar_t* section, const wchar_t* ke
     auto valid = [](const wchar_t* s) { return s && *s && wcsnlen_s(s, 256) < 256 && !wcspbrk(s, L"\r\n[]="); };
     if (!valid(section) || !valid(key) || !value || wcsnlen_s(value, 32767) >= 32767 || wcspbrk(value, L"\r\n")) return SWML_INVALID;
     if (!registered(m)) return SWML_DENIED;
-    return WritePrivateProfileStringW(section, key, value, m->settings.c_str()) ? SWML_OK : SWML_IO_ERROR;
+    try {swml_settings_store::set(m->dir,section,key,value);return SWML_OK;}catch(...){return SWML_IO_ERROR;}
 }
 swml_result command_register(swml_mod* m, const char* name, const char* help, swml_callback callback, void* context, swml_handle* out) {
     if (out) *out = 0;
