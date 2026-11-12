@@ -233,6 +233,7 @@ static void test_model()
     auto root = scratch() / "modelroot";
     put(root / "mods" / "alpha" / "mod.ini", "[mod]\r\nid=alpha\r\nname=Alpha\r\nversion=1.0.0\r\n");
     put(root / "mods" / "beta" / "mod.ini", "[mod]\r\nid=beta\r\nname=Beta\r\nversion=1.0.0\r\ndefault_enabled=0\r\n");
+    put(root / "mods" / "mod_status" / "mod.ini", "[mod]\r\nid=mod_status\r\nname=Legacy Mod Status\r\ndll=mod_status.dll\r\n");
     put(root / "swml.ini", "[mods]\r\nalpha=0\r\n");
     swml_launcher::Model model;
     model.init(root.wstring());

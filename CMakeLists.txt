@@ -162,6 +162,7 @@ if(SWML_BUILD_CORE AND WIN32 AND MSVC)
     core/native_input.cpp
     core/ui_runtime.cpp
     core/native_ui.cpp
+    core/status_display.cpp
     core/log_sessions.cpp)
   target_include_directories(swml_core PRIVATE "${SWML_GAME_DATA_DIR}")
   target_link_libraries(swml_core PRIVATE swml_lookup swml_platform_core minhook libdeflate_static)
@@ -207,3 +208,10 @@ else()
   target_link_libraries(swml_tests PRIVATE ${SWML_LINUX_NET_LIBS})
 endif()
 add_test(NAME swml_tests COMMAND swml_tests)
+
+if(WIN32)
+  add_executable(swml_status_test tests/status_test.cpp core/status_display.cpp)
+  target_include_directories(swml_status_test PRIVATE sdk core)
+  target_compile_definitions(swml_status_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+  add_test(NAME swml_status_test COMMAND swml_status_test)
+endif()
