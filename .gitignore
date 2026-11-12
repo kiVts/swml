@@ -1,7 +1,9 @@
 build/
+build-*/
 *.dll
 *.pdb
 *.obj
 settings.ini
 status.ini
 __pycache__/
+third_party/
