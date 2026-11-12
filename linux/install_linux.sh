@@ -4,6 +4,8 @@
 #   sh install_linux.sh <prefix>      use this prefix (the folder that contains drive_c)
 # Run Stormworks once with Proton first, so its prefix exists. Running it again updates the loader
 # but keeps your mods, your swml.ini, each mod's settings.ini and the logs.
+# The kit contains the native Linux mod window (swml) plus the Windows loader (swml.exe,
+# swml_core.dll) that Proton runs headless to start the game with mods.
 set -eu
 APPID=573090
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -57,6 +59,7 @@ mkdir -p "$DEST/logs"
     mv -f "$update" "$DEST/$f"
 done
 chmod +x "$DEST/swml_proton.sh"
+[ -f "$DEST/swml" ] && chmod +x "$DEST/swml"
 
 # First install: only the diagnostics/sync trace mod on, so desync captures aren't changed by the
 # other mods. Turn the others on in the mod window when you want them.
@@ -76,5 +79,5 @@ printf '  sh '
 quote "$DEST/swml_proton.sh"
 printf ' %%command%%\n'
 echo
-echo "Starting the game now shows the mod window first; Play starts the game with the enabled mods."
+echo "Starting the game now shows the native mod window first; Play starts the game with the enabled mods."
 echo "Logs: $KIT/swml_logs (swml.log, launcher.log, swml_proton.log, trace_*.csv)."

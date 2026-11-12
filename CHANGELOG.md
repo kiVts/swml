@@ -1,3 +1,5 @@
+4.5.5: Reworked launcher UI with ImGui and SDL3; fixed Windows compilation.
+
 4.5.1: The settings panel shows settings measured in a unit (seconds, ms, KB, ...) as number fields, even when their default is 0 or 1. Before, Physics Fixes' isolate_s showed as a checkbox that could only save 1.
 
 4.5.0: Changes the launch method to possibly stop the Windows Defender from picking up SWML as a virus.
