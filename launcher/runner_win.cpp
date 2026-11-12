@@ -13,6 +13,7 @@
 
 #include <windows.h>
 #include <share.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <tlhelp32.h>
 #include <algorithm>

@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define SWML_SDK_VERSION "5.0.0"
+#define SWML_SDK_VERSION "4.5.5"
 #define SWML_V2_VERSION 1u
 #define SWML_MAX_PAYLOAD 65536u
 #define SWML_NET_MAX_PAYLOAD 896u
