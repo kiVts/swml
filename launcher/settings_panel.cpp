@@ -60,9 +60,12 @@ void load(HWND window,State& s,const std::wstring& dir){
             for(auto& field:s.schema)if(swml_settings_store::lower(swml_manifest::wide(field.section))==id.first&&swml_settings_store::lower(swml_manifest::wide(field.key))==id.second){item.schema=&field;item.description=swml_manifest::wide(field.description);break;}
             // Ambiguous numeric 0/1 settings stay editable rather than becoming switches.
             auto lower=swml_settings_store::lower(item.description);
+            // A key ending in a unit (isolate_s, send_rate_kb, ...) is a quantity even when its default is 0 or 1: as a
+            // checkbox it could only ever be saved as 1 (isolate_s=1 = a new stage every second).
+            auto unit_suffix=[](const std::wstring& key){for(auto u:{L"_s",L"_ms",L"_m",L"_cm",L"_mm",L"_km",L"_kb",L"_mb",L"_gb",L"_hz",L"_n",L"_pct",L"_deg",L"_px"}){std::wstring_view s(u);if(key.size()>s.size()&&key.compare(key.size()-s.size(),s.size(),s)==0)return true;}return false;};
             item.checkbox=item.schema?item.schema->type=="bool":(value==L"0"||value==L"1")&&
                 (lower.find(L"1 =")!=lower.npos||lower.find(L"1=")!=lower.npos||lower.find(L"0 = off")!=lower.npos||item.key==L"enabled")&&lower.find(L"0 = auto")==lower.npos&&
-                id.second.find(L"threads")==id.second.npos&&id.second.find(L"ticks")==id.second.npos&&id.second.find(L"_ms")==id.second.npos&&id.second.find(L"_hz")==id.second.npos&&lower.find(L"2 =")==lower.npos&&lower.find(L"2=")==lower.npos;
+                id.second.find(L"threads")==id.second.npos&&id.second.find(L"ticks")==id.second.npos&&!unit_suffix(id.second)&&lower.find(L"2 =")==lower.npos&&lower.find(L"2=")==lower.npos;
             s.items.push_back(std::move(item));
         }
         // Items are no longer moved after tooltip text pointers are registered.
