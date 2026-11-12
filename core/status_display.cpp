@@ -3,6 +3,7 @@
 #include "health.h"
 #include "native_ui.h"
 #include "swml_v2.h"
+#include "multiplayer_gate.h"
 #include <map>
 #include <string>
 #include <string_view>
@@ -49,8 +50,9 @@ void screen(const swml_ui_event* event, void*) {
         if (!native_version(text)) return; // Preserve unrelated text/another owner's edit.
         label.base = text;
     }
-    const auto wanted = label.base + " | SWML V" SWML_SDK_VERSION " " +
+    auto wanted = label.base + " | SWML V" SWML_SDK_VERSION " " +
         std::to_string(status.loaded_mods) + " mods loaded" + (status.fault_found ? ", fault found" : "");
+    if (const auto* message = core_multiplayer_notice(); *message) wanted += std::string(" | ") + message;
     if (wanted == text) return;
     if (sdk_ui::set_text(&owner, event->root, wanted.c_str()) == SWML_OK) label.last = wanted;
     else swml_health::note_fault();

@@ -163,9 +163,10 @@ if(SWML_BUILD_CORE AND WIN32 AND MSVC)
     core/ui_runtime.cpp
     core/native_ui.cpp
     core/status_display.cpp
+    core/multiplayer_gate.cpp
     core/log_sessions.cpp)
   target_include_directories(swml_core PRIVATE "${SWML_GAME_DATA_DIR}")
-  target_link_libraries(swml_core PRIVATE swml_lookup swml_platform_core minhook libdeflate_static)
+  target_link_libraries(swml_core PRIVATE swml_lookup swml_platform_core minhook libdeflate_static bcrypt)
   target_compile_definitions(swml_core PRIVATE ${SWML_DEFS})
   target_compile_options(swml_core PRIVATE ${SWML_OPTS})
 
@@ -209,7 +210,16 @@ else()
 endif()
 add_test(NAME swml_tests COMMAND swml_tests)
 
+add_executable(swml_multiplayer_protocol_test tests/multiplayer_protocol_test.cpp)
+target_include_directories(swml_multiplayer_protocol_test PRIVATE core)
+add_test(NAME swml_multiplayer_protocol_test COMMAND swml_multiplayer_protocol_test)
+
 if(WIN32)
+  add_executable(swml_multiplayer_transport_test tests/multiplayer_transport_test.cpp)
+  target_include_directories(swml_multiplayer_transport_test PRIVATE sdk core)
+  target_compile_definitions(swml_multiplayer_transport_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+  target_link_libraries(swml_multiplayer_transport_test PRIVATE bcrypt)
+  add_test(NAME swml_multiplayer_transport_test COMMAND swml_multiplayer_transport_test)
   add_executable(swml_status_test tests/status_test.cpp core/status_display.cpp)
   target_include_directories(swml_status_test PRIVATE sdk core)
   target_compile_definitions(swml_status_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)

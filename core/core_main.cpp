@@ -14,6 +14,7 @@
 #include "log_sessions.h"
 #include "health.h"
 #include "status_display.h"
+#include "multiplayer_gate.h"
 
 #include "game.h"
 #include "log.h"
@@ -416,8 +417,13 @@ DWORD WINAPI init_thread(void*)
     }
     core_crash_install();
     core_events_install();
+    const bool multiplayer_protected = core_multiplayer_install();
+    if (!multiplayer_protected) {
+        swml_health::note_fault();
+        corelog("multiplayer protection could not be installed; refusing to load mods");
+    }
     if (!core_status_install()) swml_health::note_fault();
-    load_mods();
+    if (multiplayer_protected) load_mods();
     uint32_t loaded = 0;
     for (const auto* m : g_mods) {
         loaded += m->operational;
