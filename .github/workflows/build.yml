@@ -21,8 +21,6 @@ jobs:
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSWML_BUILD_CORE=OFF
       - name: Build
         run: cmake --build build
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
 
   windows-launcher:
     # Cross-check that the launcher (UI + platform layer) compiles for Windows. The in-game

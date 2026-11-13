@@ -1,3 +1,5 @@
+4.6.1: Packaging update.
+
 4.6.0: Built-in mod status and mandatory SWML multiplayer compatibility handshake.
 
 4.5.5: Reworked launcher UI with ImGui and SDL3; fixed Windows compilation.

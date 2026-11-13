@@ -11,8 +11,6 @@ On Linux the mod window is a **native app** (`swml`, Dear ImGui + SDL3, Wayland 
 | `launcher/` | `swml.exe` / `swml`: the mod list, settings, starting the game |
 | `sdk/` | The headers and helpers mods are built with |
 | `linux/` | Installer, Proton wrapper and static release build for Linux |
-| `tests/` | Portable unit tests for the launcher logic |
-
 
 ## Install
 
