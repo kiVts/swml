@@ -16,6 +16,7 @@ On Linux the mod window is a **native app** (`swml`, Dear ImGui + SDL3, Wayland 
 
 Extract the release zip and run `install.bat`. It copies the loader to your appdata/local and opens it. After that copy the launch options & add them to stormworks properties.
 After that start stormworks from steam normally, you can then click "Add Mods..." and select a zipfile for a mod. Be careful what you install.
+For existing mods that you could use, go to [SWML Website](https://swml.kivts.net/mods.html)
 
 ### Linux (Steam + Proton)
 
