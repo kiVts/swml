@@ -3,6 +3,7 @@
 #include "contract.h"
 #include "mod_manifest.h"
 #include "json.h"
+#include "steam_install.h"
 #include <bcrypt.h>
 #include <shlobj.h>
 #include <shellapi.h>
@@ -101,11 +102,12 @@ void perform(const std::wstring& action,const fs::path& source,fs::path game,fs:
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
     try {
         wchar_t module[32768]{};GetModuleFileNameW(nullptr,module,32768);fs::path source=fs::path(module).parent_path();
-        fs::path game=L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Stormworks";
+        fs::path game;
         PWSTR local=nullptr;if(FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&local)))throw std::runtime_error("Cannot find local app data");fs::path loader=fs::path(local)/L"swml";CoTaskMemFree(local);
         int argc=0;auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);if(!argv)throw std::runtime_error("Invalid arguments");std::wstring action=L"--install";bool explicit_game=false;
         for(int i=1;i<argc;++i){std::wstring arg=argv[i];if(arg==L"--install"||arg==L"--remove"||arg==L"--rollback")action=arg;else if(arg==L"--game"&&i+1<argc){game=argv[++i];explicit_game=true;}else if(arg==L"--loader"&&i+1<argc)loader=argv[++i];else {LocalFree(argv);throw std::runtime_error("Invalid command arguments");}}LocalFree(argv);
         CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+        if(!explicit_game){auto installed=swml_steam_install::discover(swml_steam_install::roots());if(installed.size()==1){game=installed.front();explicit_game=true;}}
         if(!explicit_game){BROWSEINFOW browse{};browse.lpszTitle=L"Select the Stormworks folder containing stormworks64.exe";browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;auto item=SHBrowseForFolderW(&browse);if(!item)return 2;wchar_t selected[32768]{};bool ok=SHGetPathFromIDListW(item,selected)!=FALSE;CoTaskMemFree(item);if(!ok)throw std::runtime_error("Cannot read selected folder");game=selected;}
         if(MessageBoxW(nullptr,(L"Update SWML files?\n\nGame: "+game.wstring()+L"\nLoader: "+loader.wstring()+L"\n\nClose the game and SWML first. Mods/settings are preserved.").c_str(),L"SWML setup",MB_YESNO|MB_ICONQUESTION)!=IDYES)return 2;
         perform(action,source,game,loader);MessageBoxW(nullptr,L"Operation completed. No game was launched.",L"SWML setup",MB_OK);return 0;

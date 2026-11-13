@@ -1,3 +1,5 @@
+4.6.2: Installer automatically locates Stormworks across Steam libraries.
+
 4.6.1: Packaging update.
 
 4.6.0: Built-in mod status and mandatory SWML multiplayer compatibility handshake.
