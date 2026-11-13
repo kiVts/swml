@@ -189,7 +189,8 @@ struct SettingsPanel {
                 encoded = wide(swml_settings::encode(field, decoded));
             } else if (!item.checkbox) {
                 wchar_t* end = nullptr;
-                std::wcstod(item.initial.c_str(), &end);
+                // Only checks whether the current value is numeric; the number itself is not needed.
+                [[maybe_unused]] const double initial_number = std::wcstod(item.initial.c_str(), &end);
                 if (end != item.initial.c_str() && !*end) {
                     double number = std::wcstod(value.c_str(), &end);
                     if (end == value.c_str() || *end || !std::isfinite(number)) throw std::runtime_error("enter a finite numeric value");

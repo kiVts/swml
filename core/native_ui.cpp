@@ -20,6 +20,8 @@
 #include <string>
 
 namespace {
+// Raw field access by byte offset is intended here.
+// cppcheck-suppress invalidPointerCast
 template<class T> T& field(void* p, size_t offset) { return *reinterpret_cast<T*>(static_cast<uint8_t*>(p) + offset); }
 struct String { char* data; uint32_t length, capacity; };
 struct Ring { void** data; uint32_t capacity, head, count; };
