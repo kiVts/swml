@@ -1,4 +1,8 @@
-name: build
+name: lint
+
+# Static checks only. The SDK in this repository is frozen, so the code here is not compiled
+# against it: newer loader code may need SDK parts that are not public. Release builds are made
+# elsewhere.
 
 on:
   push:
@@ -6,46 +10,34 @@ on:
   pull_request:
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  cpp:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
+      - name: Install cppcheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libcurl4-openssl-dev libssl-dev \
-            libwayland-dev libxkbcommon-dev wayland-protocols \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev \
-            libgl-dev libegl-dev zlib1g-dev
-      - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSWML_BUILD_CORE=OFF
-      - name: Build
-        run: cmake --build build
+          sudo apt-get install -y cppcheck
+      - name: cppcheck
+        # Headers outside this repository (game data, SDK additions, system headers) are not
+        # needed: missing includes are ignored, and only real warnings fail the job.
+        run: |
+          cppcheck --version
+          cppcheck --std=c++20 --language=c++ --enable=warning,portability \
+            --inline-suppr --error-exitcode=1 --quiet --max-configs=4 \
+            --suppress=missingInclude --suppress=missingIncludeSystem --suppress=unknownMacro \
+            -j "$(nproc)" core launcher bootstrap
 
-  windows-launcher:
-    # Cross-check that the launcher (UI + platform layer) compiles for Windows. The in-game
-    # core/bootstrap need MSVC + generated per-build headers and are built in the release
-    # pipeline, not here.
-    runs-on: ubuntu-latest
+  python:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install mingw
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build g++-mingw-w64-x86-64
-      - name: Configure
-        run: |
-          cat > toolchain.cmake <<'EOF'
-          set(CMAKE_SYSTEM_NAME Windows)
-          set(CMAKE_SYSTEM_PROCESSOR AMD64)
-          set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
-          set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
-          set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
-          set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
-          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-          EOF
-          cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DSWML_BUILD_CORE=OFF
-      - name: Build
-        run: cmake --build build
+      - name: Byte-compile scripts
+        run: python3 -m py_compile bootstrap/generate_exports.py
+
+  shell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck --severity=error linux/*.sh
