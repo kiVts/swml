@@ -214,6 +214,10 @@ add_executable(swml_multiplayer_protocol_test tests/multiplayer_protocol_test.cp
 target_include_directories(swml_multiplayer_protocol_test PRIVATE core)
 add_test(NAME swml_multiplayer_protocol_test COMMAND swml_multiplayer_protocol_test)
 
+add_executable(swml_multiplayer_simulation_test tests/multiplayer_simulation_test.cpp)
+target_include_directories(swml_multiplayer_simulation_test PRIVATE core)
+add_test(NAME swml_multiplayer_simulation_test COMMAND swml_multiplayer_simulation_test)
+
 if(WIN32)
   add_executable(swml_multiplayer_transport_test tests/multiplayer_transport_test.cpp)
   target_include_directories(swml_multiplayer_transport_test PRIVATE sdk core)
