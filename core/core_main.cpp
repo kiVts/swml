@@ -13,6 +13,8 @@
 #include "core_v4.h"
 #include "log_sessions.h"
 #include "health.h"
+#include "status_display.h"
+#include "multiplayer_gate.h"
 
 #include "game.h"
 #include "log.h"
@@ -282,7 +284,13 @@ void load_mods()
     std::vector<std::wstring> ids;
     if (h != INVALID_HANDLE_VALUE) {
         do {
-            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.cFileName[0] != L'.') ids.push_back(fd.cFileName);
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.cFileName[0] != L'.') {
+                if (!_wcsicmp(fd.cFileName, L"mod_status")) {
+                    corelog("mod_status is built into SWML; ignoring the legacy standalone mod");
+                    continue;
+                }
+                ids.push_back(fd.cFileName);
+            }
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
@@ -409,7 +417,13 @@ DWORD WINAPI init_thread(void*)
     }
     core_crash_install();
     core_events_install();
-    load_mods();
+    const bool multiplayer_protected = core_multiplayer_install();
+    if (!multiplayer_protected) {
+        swml_health::note_fault();
+        corelog("multiplayer protection could not be installed; refusing to load mods");
+    }
+    if (!core_status_install()) swml_health::note_fault();
+    if (multiplayer_protected) load_mods();
     uint32_t loaded = 0;
     for (const auto* m : g_mods) {
         loaded += m->operational;

@@ -32,6 +32,8 @@ void Model::reload()
         if (!it->is_directory(error)) continue;
         auto id = it->path().filename().wstring();
         if (id.empty() || id[0] == L'.') continue;
+        // Older installations may retain this folder; the core now owns its display.
+        if (swml_platform::compare_icase(id, L"mod_status") == 0) continue;
         Mod m;
         m.id = id;
         m.dir = it->path().wstring();

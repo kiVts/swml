@@ -13,6 +13,7 @@ On Linux the mod window is a **native app** (`swml`, Dear ImGui + SDL3, Wayland 
 | `linux/` | Installer, Proton wrapper and static release build for Linux |
 | `tests/` | Portable unit tests for the launcher logic |
 
+
 ## Install
 
 Extract the release zip and run `install.bat`. It copies the loader to your appdata/local and opens it. After that copy the launch options & add them to stormworks properties.

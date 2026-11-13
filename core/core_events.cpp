@@ -9,6 +9,7 @@
 #include "core.h"
 #include "core_v2.h"
 #include "input_runtime.h"
+#include "multiplayer_gate.h"
 
 #include "resolve.h"
 
@@ -59,6 +60,7 @@ bool g_loop_ok = false;
 
 BOOL WINAPI swap_detour(HDC dc)
 {
+    core_multiplayer_tick();
     sdk_input::native_present(dc);
     core_v2_pump(SWML_LANE_RENDER);
     void* hdc = dc;
