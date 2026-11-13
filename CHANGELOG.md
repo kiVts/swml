@@ -1,3 +1,5 @@
+4.6.3: Fixed a crash a few seconds after the game starts and a crash right after loading into a world. The in-game version text now shows the right SWML version.
+
 4.6.2: Installer automatically locates Stormworks across Steam libraries.
 
 4.6.1: Packaging update.

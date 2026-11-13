@@ -15,6 +15,7 @@
 #include "health.h"
 #include "status_display.h"
 #include "multiplayer_gate.h"
+#include "resolve.h"
 
 #include "game.h"
 #include "log.h"
@@ -411,6 +412,13 @@ DWORD WINAPI init_thread(void*)
         if (!g_log) OutputDebugStringA(("SWML log history: " + session.warning + "\n").c_str());
     }
     game_init();
+    if (!game_addrs_layout_ok()) {
+        // A core built against a different copy of sdk/resolve.h would hook the wrong game addresses.
+        corelog("build error: GameAddrs layout differs between core (%llx) and swml_lookup (%llx); no hooks installed",
+                static_cast<unsigned long long>(kGameAddrsLayout), static_cast<unsigned long long>(game_addrs_layout()));
+        swml_health::note_fault();
+        return 0;
+    }
     if (MH_STATUS st = MH_Initialize(); st != MH_OK) {
         corelog("MH_Initialize failed: %s", MH_StatusToString(st));
         return 0;

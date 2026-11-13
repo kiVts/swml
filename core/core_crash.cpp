@@ -109,6 +109,7 @@ void log_exception(EXCEPTION_POINTERS* ep, const char* tag)
     }
 }
 
+void write_dump(EXCEPTION_POINTERS* ep);
 LONG CALLBACK vectored(EXCEPTION_POINTERS* ep)
 {
     const EXCEPTION_RECORD* er = ep->ExceptionRecord;
@@ -116,6 +117,9 @@ LONG CALLBACK vectored(EXCEPTION_POINTERS* ep)
     uintptr_t at = reinterpret_cast<uintptr_t>(er->ExceptionAddress);
     if (in_module(g_self, at) || core_mod_at(at)) return EXCEPTION_CONTINUE_SEARCH; // core / mod __try reads
     if (g_logged.fetch_add(1) < 10) log_exception(ep, "CRASH?");
+    // The game's own handlers can end the process before the unhandled filter runs, leaving no dump: write one
+    // now for an access violation in game code (once per process).
+    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && in_module(GetModuleHandleW(nullptr), at)) write_dump(ep);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 

@@ -486,6 +486,7 @@ bool resolve(unsigned groups)
 }
 
 const GameAddrs& addrs() { return g_addrs; }
+uint64_t game_addrs_layout() { return kGameAddrsLayout; }
 
 uintptr_t native_find_pattern(const char* text, const char* section)
 {

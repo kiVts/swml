@@ -165,7 +165,9 @@ if(SWML_BUILD_CORE AND WIN32 AND MSVC)
     core/status_display.cpp
     core/multiplayer_gate.cpp
     core/log_sessions.cpp)
-  target_include_directories(swml_core PRIVATE "${SWML_GAME_DATA_DIR}")
+  # This repository's sdk/ first: SWML_GAME_DATA_DIR only supplies the generated headers, and must not shadow
+  # the SDK headers that swml_lookup is compiled against.
+  target_include_directories(swml_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/sdk" "${SWML_GAME_DATA_DIR}")
   target_link_libraries(swml_core PRIVATE swml_lookup swml_platform_core minhook libdeflate_static bcrypt)
   target_compile_definitions(swml_core PRIVATE ${SWML_DEFS})
   target_compile_options(swml_core PRIVATE ${SWML_OPTS})

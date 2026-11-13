@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 
@@ -70,6 +71,14 @@ enum : unsigned {
 };
 bool resolve(unsigned groups); // resolves (and logs) the given groups; true if all succeeded
 const GameAddrs& addrs(); // results
+
+// GameAddrs crosses a library boundary (resolve.cpp fills it, callers read it). Both sides must compile the
+// same layout; a caller built against another copy of this header reads the wrong fields. The fingerprint is
+// computed in each translation unit and compared with the one resolve.cpp was built with.
+inline constexpr uint64_t kGameAddrsLayout =
+    (uint64_t(sizeof(GameAddrs)) << 32) | uint64_t(offsetof(GameAddrs, clock_fn));
+uint64_t game_addrs_layout(); // resolve.cpp's kGameAddrsLayout
+inline bool game_addrs_layout_ok() { return game_addrs_layout() == kGameAddrsLayout; }
 
 // SDK reusable native discovery. Startup/explicit feature activation only: scanning is expensive.
 // Patterns are space-separated hex bytes or ?/??. No result if malformed, absent or ambiguous.

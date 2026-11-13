@@ -26,11 +26,13 @@ struct Message {
 static_assert(offsetof(Message, identity) == 0x10 && offsetof(Message, release) == 0xb8 &&
               offsetof(Message, channel) == 0xc0);
 using Get = void*(__cdecl*)();
-using Send = int(__fastcall*)(void*, const Identity&, const void*, uint32_t, int, int);
+// Identities are passed by reference in Steam's C++ ABI, i.e. as pointers. They are taken as pointers here so a
+// null one can be refused instead of read.
+using Send = int(__fastcall*)(void*, const Identity*, const void*, uint32_t, int, int);
 using Receive = int(__fastcall*)(void*, int, Message**, int);
-using Accept = bool(__fastcall*)(void*, const Identity&);
-using Close = bool(__fastcall*)(void*, const Identity&);
-using Info = int(__fastcall*)(void*, const Identity&, void*, void*);
+using Accept = bool(__fastcall*)(void*, const Identity*);
+using Close = bool(__fastcall*)(void*, const Identity*);
+using Info = int(__fastcall*)(void*, const Identity*, void*, void*);
 using Shutdown = void(__cdecl*)();
 Get original_get = nullptr;
 Send original_send = nullptr;
@@ -54,15 +56,24 @@ uint64_t rejection_time = 0;
 uint64_t last_pump = 0;
 bool have_pumped = false;
 uint64_t last_bind_attempt = 0;
+// The gate hooks the ISteamNetworkingMessages object only, by giving it a copy of its vtable with slots 0..3
+// replaced. The code behind those slots is not patched, since it may also serve other interfaces. The copy
+// has 16 slots so other mods that copy 16 entries from the object's vtable keep working.
+constexpr size_t vtable_slots = 16, max_tables = 4;
+void* tables[max_tables][vtable_slots]{}; // never freed: a call may still be on its way through an old one
+size_t tables_used = 0;
+void** active_table = nullptr;
+bool rewrap_reported = false;
 
-uint64_t key(const Identity& identity) {
+uint64_t key(const Identity* identity) {
     // Stormworks Steam peers use SteamID identities. Never key uninitialized padding.
-    if (identity.type != 16 || identity.size != 8) return 0;
-    uint64_t id = 0; std::memcpy(&id, identity.data, 8); return id;
+    if (!identity || identity->type != 16 || identity->size != 8) return 0;
+    uint64_t id = 0; std::memcpy(&id, identity->data, 8); return id;
 }
 Identity identity_for(uint64_t id) {
     Identity out{}; out.type = 16; out.size = 8; std::memcpy(out.data, &id, 8); return out;
 }
+int session_check(uint64_t id) { const auto identity = identity_for(id); return session_info(messages, &identity, nullptr, nullptr); }
 swml_gate::Nonce random_nonce() {
     swml_gate::Nonce nonce{};
     if (BCryptGenRandom(nullptr, nonce.data(), ULONG(nonce.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
@@ -91,13 +102,13 @@ void reject(uint64_t id, const char* reason, uint64_t now) {
         corelog("multiplayer blocked: %s; both sides need a compatible SWML core", reason);
         if (it == gate.peers.end()) last_overflow_log = now;
     }
-    if (messages && original_close) { const auto identity = identity_for(id); original_close(messages, identity); }
+    if (messages && original_close) { const auto identity = identity_for(id); original_close(messages, &identity); }
 }
 swml_gate::Peer* touch(uint64_t id, uint64_t now) {
     auto it = gate.peers.find(id);
     if (it != gate.peers.end()) {
         if (it->second.state == swml_gate::State::allowed && session_info && now - it->second.last_session_check >= 100 &&
-            session_info(messages, identity_for(id), nullptr, nullptr) != 3) {
+            session_check(id) != 3) {
             discard(id); connections.erase(id); gate.peers.erase(it);
         } else {
             if (it->second.state == swml_gate::State::allowed && now - it->second.last_session_check >= 100)
@@ -121,7 +132,8 @@ void observe_connection(uint64_t id, uint32_t connection) {
 }
 void send_control(uint64_t id, const swml_gate::Packet& packet) {
     const auto bytes = swml_gate::encode(packet);
-    original_send(messages, identity_for(id), bytes.data(), uint32_t(bytes.size()), 8, swml_gate::channel);
+    const auto identity = identity_for(id);
+    original_send(messages, &identity, bytes.data(), uint32_t(bytes.size()), 8, swml_gate::channel);
 }
 void pump(uint64_t now, bool force = true) {
     if (stopped || !bound || !messages) return;
@@ -135,7 +147,7 @@ void pump(uint64_t now, bool force = true) {
         for (int i = 0; i < std::min(count, 16); ++i) {
             auto* m = incoming[i];
             if (!m) continue;
-            const auto id = key(m->identity);
+            const auto id = key(&m->identity);
             swml_gate::Packet packet;
             if (id && m->size >= 0 && swml_gate::decode(m->data, size_t(m->size), packet)) {
                 observe_connection(id, m->connection);
@@ -168,7 +180,7 @@ void pump(uint64_t now, bool force = true) {
             discard(id); connections.erase(id); it = gate.peers.erase(it); continue;
         }
         if (p.state == swml_gate::State::allowed && session_info && now - p.last_session_check >= 100 &&
-            session_info(messages, identity_for(id), nullptr, nullptr) != 3) {
+            session_check(id) != 3) {
             discard(id); connections.erase(id); it = gate.peers.erase(it); continue;
         }
         if (p.state == swml_gate::State::allowed && now - p.last_session_check >= 100) p.last_session_check = now;
@@ -189,7 +201,9 @@ void pump(uint64_t now, bool force = true) {
     if (pending) notice.store(1);
     else if (!rejection_time || now - rejection_time >= swml_gate::cooldown_ms) notice.store(0);
 }
-int __fastcall send_hook(void* self, const Identity& identity, const void* data, uint32_t size, int flags, int channel) {
+// The hooks are only reachable through the Messages object's own vptr, so self is that object; the checks
+// below stay as a guard against a stale table after shutdown.
+int __fastcall send_hook(void* self, const Identity* identity, const void* data, uint32_t size, int flags, int channel) {
     std::lock_guard lock(mutex);
     if (stopped || !bound || self != messages) return result_no_connection;
     // The reserved channel is never available to the game or external mods via this interface.
@@ -222,7 +236,7 @@ int __fastcall receive_hook(void* self, int channel, Message** out, int capacity
     for (int i = 0; i < std::clamp(count, 0, requested); ++i) {
         auto* m = incoming[i];
         if (!m) continue;
-        const auto id = key(m->identity);
+        const auto id = key(&m->identity);
         if (!id || m->size < 0 || !m->release) { release_message(m); continue; }
         observe_connection(id, m->connection);
         auto* p = touch(id, now);
@@ -237,7 +251,7 @@ int __fastcall receive_hook(void* self, int channel, Message** out, int capacity
     pump(now, false);
     return delivered;
 }
-bool __fastcall accept_hook(void* self, const Identity& identity) {
+bool __fastcall accept_hook(void* self, const Identity* identity) {
     std::lock_guard lock(mutex);
     if (stopped || !bound || self != messages) return false;
     const auto id = key(identity);
@@ -249,22 +263,61 @@ bool __fastcall accept_hook(void* self, const Identity& identity) {
     const bool accepted = original_accept(self, identity);
     pump(GetTickCount64(), true); return accepted;
 }
-bool __fastcall close_hook(void* self, const Identity& identity) {
+bool __fastcall close_hook(void* self, const Identity* identity) {
     std::lock_guard lock(mutex);
-    const auto id = key(identity); discard(id); connections.erase(id); gate.peers.erase(id);
-    return !stopped && original_close ? original_close(self, identity) : false;
+    if (stopped || !original_close) return false;
+    if (self == messages) { const auto id = key(identity); if (id) { discard(id); connections.erase(id); gate.peers.erase(id); } }
+    return original_close(self, identity);
+}
+bool readable(const void* p, size_t bytes) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+        return false;
+    return static_cast<const uint8_t*>(p) + bytes <= static_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
+}
+// Gives the object a copy of its current vtable with the gate in slots 0..3; the replaced entries become the
+// originals. Copying the current table (not Steam's) keeps any other wrapper, e.g. network_fixes, in the chain.
+bool wrap(void* object) {
+    auto** current = *static_cast<void***>(object);
+    if (tables_used == max_tables || !readable(current, sizeof(void*) * vtable_slots)) return false;
+    auto* table = tables[tables_used++];
+    std::memcpy(table, current, sizeof(void*) * vtable_slots);
+    original_send = reinterpret_cast<Send>(current[0]);
+    original_receive = reinterpret_cast<Receive>(current[1]);
+    original_accept = reinterpret_cast<Accept>(current[2]);
+    original_close = reinterpret_cast<Close>(current[3]);
+    session_info = reinterpret_cast<Info>(current[5]);
+    table[0] = reinterpret_cast<void*>(&send_hook);
+    table[1] = reinterpret_cast<void*>(&receive_hook);
+    table[2] = reinterpret_cast<void*>(&accept_hook);
+    table[3] = reinterpret_cast<void*>(&close_hook);
+    active_table = table;
+    InterlockedExchangePointer(static_cast<void**>(object), table);
+    return true;
+}
+// Another vptr swap that copied the table before ours drops the gate; slot 3 is ours alone, so it tells.
+void keep_wrapped() {
+    auto** current = *static_cast<void***>(messages);
+    if (current == active_table || (readable(current, sizeof(void*) * 4) && current[3] == reinterpret_cast<void*>(&close_hook)))
+        return;
+    if (wrap(messages)) {
+        if (!rewrap_reported) corelog("multiplayer: another vtable replacement dropped the gate; wrapped it again");
+        rewrap_reported = true;
+    } else {
+        corelog("multiplayer: the gate was replaced and cannot be restored; multiplayer protection unavailable");
+        bind_failed = true; bound = false; notice.store(3); swml_health::note_fault();
+    }
 }
 bool bind(void* object) {
     if (!object || stopped || bind_failed) return false;
     if (bound) return object == messages;
     messages = object;
-    auto** table = *static_cast<void***>(object);
-    session_info = reinterpret_cast<Info>(table[5]);
-    bound = core_internal_hook(table[0], reinterpret_cast<void*>(&send_hook), reinterpret_cast<void**>(&original_send), "SWML multiplayer send gate") &&
-        core_internal_hook(table[1], reinterpret_cast<void*>(&receive_hook), reinterpret_cast<void**>(&original_receive), "SWML multiplayer receive gate") &&
-        core_internal_hook(table[2], reinterpret_cast<void*>(&accept_hook), reinterpret_cast<void**>(&original_accept), "SWML multiplayer session gate") &&
-        core_internal_hook(table[3], reinterpret_cast<void*>(&close_hook), reinterpret_cast<void**>(&original_close), "SWML multiplayer session reset");
-    if (!bound) { bind_failed = true; notice.store(3); swml_health::note_fault(); }
+    bound = wrap(object);
+    if (!bound) {
+        messages = nullptr;
+        corelog("multiplayer: Steam Messages vtable unreadable; multiplayer protection unavailable");
+        bind_failed = true; notice.store(3); swml_health::note_fault();
+    }
     return bound;
 }
 void* __cdecl get_hook() {
@@ -308,6 +361,7 @@ void core_multiplayer_tick() {
         last_bind_attempt = now;
         auto* object = original_get(); if (object) bind(object);
     }
+    if (bound) keep_wrapped();
     pump(now, false);
 }
 const char* core_multiplayer_notice() {
