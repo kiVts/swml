@@ -6,6 +6,7 @@
 #include "launcher_model.h"
 #include "management.h"
 #include "updates.h"
+#include "loader_version.h"
 #include "zip.h"
 #include "settings_store.h"
 #include "settings_schema.h"
@@ -22,6 +23,7 @@
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
+#include "swml_brand_data.h"
 
 #include <algorithm>
 #include <atomic>
@@ -59,6 +61,8 @@ std::wstring trim(std::wstring s)
 
 const char* mp_text(const std::wstring& mp)
 {
+    if (mp == L"both_or_host" || mp == L"Both or host only") return "Both or host only";
+    if (mp == L"both_or_client" || mp == L"Both or client only") return "Both or client only";
     if (mp == L"host") return "the host needs it (other players don't)";
     if (mp == L"everyone") return "every player in the session needs it";
     return "only affects you (other players don't need it)";
@@ -213,6 +217,7 @@ struct SettingsPanel {
 
 // --- background work -------------------------------------------------------------------------------
 struct WorkResult {
+    bool adding = false;
     bool check = false;
     bool have_index = false;
     swml_updates::Index index;
@@ -241,6 +246,8 @@ struct App {
     swml_updates::Index index;
     bool have_index = false, checking = false, installing = false;
     std::wstring update_status;
+    bool catalogue_open = false;
+    char catalogue_filter[128]{};
 
     std::mutex work_mutex;
     std::unique_ptr<WorkResult> pending_work;
@@ -312,13 +319,14 @@ struct App {
         }).detach();
     }
 
-    void start_updates(std::vector<swml_updates::Entry> entries)
+    void start_updates(std::vector<swml_updates::Entry> entries, bool adding = false)
     {
-        if (installing || entries.empty()) return;
+        if (checking || installing || entries.empty()) return;
         installing = true;
-        update_status = L"Updating " + std::to_wstring(entries.size()) + (entries.size() == 1 ? L" mod..." : L" mods...");
-        std::thread([this, root = model.root, entries = std::move(entries)] {
+        update_status = (adding ? L"Installing " : L"Updating ") + std::to_wstring(entries.size()) + (entries.size() == 1 ? L" mod..." : L" mods...");
+        std::thread([this, root = model.root, entries = std::move(entries), adding] {
             auto result = std::make_unique<WorkResult>();
+            result->adding = adding;
             for (const auto& entry : entries) {
                 std::wstring error;
                 if (swml_updates::update_mod(root, entry, error)) ++result->updated;
@@ -345,7 +353,7 @@ struct App {
             }
             index = std::move(result->index);
             have_index = true;
-            show_notice = swml_updates::newer(index.loader_version, SWML_SDK_VERSION);
+            show_notice = swml_updates::newer(index.loader_version, SWML_LOADER_VERSION);
             if (show_notice) notice_text = L"SWML " + wide(index.loader_version) + L" available";
             reload_mods();
             auto count = std::count_if(model.mods.begin(), model.mods.end(), [&](const Mod& m) { return model.can_update(m, index, have_index); });
@@ -354,7 +362,7 @@ struct App {
         }
         installing = false;
         reload_mods();
-        update_status = L"Updated " + std::to_wstring(result->updated) + (result->updated == 1 ? L" mod." : L" mods.");
+        update_status = (result->adding ? L"Installed " : L"Updated ") + std::to_wstring(result->updated) + (result->updated == 1 ? L" mod." : L" mods.");
         if (!result->failures.empty()) open_popup(L"Mod update failed", L"These mods were not updated and are unchanged:\n\n" + result->failures);
     }
 
@@ -418,7 +426,10 @@ struct App {
     {
         auto picked = swml_platform::pick_open_file(L"Add a mod: pick its mod.ini, or a .zip",
                                                     {{L"Mod (mod.ini or .zip)", L"mod.ini;*.zip"}});
-        if (!picked.empty()) { add_mod_from(picked); return; }
+        if (picked) {
+            if (!picked->empty()) add_mod_from(*picked); // empty: the user closed the picker
+            return;
+        }
         // No desktop picker available (e.g. gamescope session): ask for a path.
         path_prompt_buffer.clear();
         path_prompt_open = true;
@@ -592,6 +603,271 @@ void load_fonts(float scale)
     io.Fonts->AddFontDefault();
 }
 
+// --- brand ---------------------------------------------------------------------------------------
+// The site's palette and the logo lockup (tools/make_brand.py draws the same thing for the SVG/PNG
+// logo files; keep the geometry in step).
+namespace brand {
+constexpr ImVec4 rgb(int hex, float a = 1.0f)
+{
+    return ImVec4(((hex >> 16) & 255) / 255.0f, ((hex >> 8) & 255) / 255.0f, (hex & 255) / 255.0f, a);
+}
+constexpr ImVec4 bg = rgb(0x0b1016), bg2 = rgb(0x111923), panel = rgb(0x151f2b), line = rgb(0x243244),
+                 line_hi = rgb(0x2e4057), text = rgb(0xdbe4ee), muted = rgb(0x8a9bb0), accent = rgb(0xffb020),
+                 accent_hi = rgb(0xffc24f), accent_ink = rgb(0x1a1200), stripe_dim = rgb(0x1d2a3a),
+                 sea = rgb(0x3aa7c9), sea_hi = rgb(0x6cc4e0);
+const float text_skew = std::tan(10.0f * 3.14159265f / 180.0f); // on top of the font's own italic
+const float bar_skew = std::tan(18.0f * 3.14159265f / 180.0f);
+constexpr int bars = 16;
+constexpr float bar_ramp = 0.16f;
+// ImGui sizes a font by ascender-to-descender height; Chakra Petch's is 1.3 em (992 + 308 of 1000).
+// The logo geometry is in em, like the SVG.
+constexpr float em_px = 1.3f;
+ImFont* font = nullptr; // Chakra Petch Bold Italic, embedded
+
+// Slant everything drawn since vtx_start right going up, pivoting on baseline_y.
+void shear(ImDrawList* dl, int vtx_start, float baseline_y, float skew)
+{
+    for (int i = vtx_start; i < dl->VtxBuffer.Size; i++) {
+        ImDrawVert& v = dl->VtxBuffer[i];
+        v.pos.x += (baseline_y - v.pos.y) * skew;
+    }
+}
+
+// count slanted bars filling [a, b], widest first when reverse; alpha(t) fades them along x.
+template <class Alpha>
+void bar_run(ImDrawList* dl, ImVec2 a, ImVec2 b, float gap, bool reverse, ImVec4 color, Alpha alpha)
+{
+    const float lean = (b.y - a.y) * bar_skew;
+    float weights = 0;
+    for (int i = 0; i < bars; i++) weights += 1 + i * bar_ramp;
+    const float unit = (b.x - a.x - lean - gap * (bars - 1)) / weights;
+    if (unit <= 0) return;
+    float x = a.x;
+    for (int i = 0; i < bars; i++) {
+        int k = reverse ? bars - 1 - i : i;
+        float w = (1 + k * bar_ramp) * unit;
+        float t = (x + w * 0.5f + lean * 0.5f - a.x) / (b.x - a.x);
+        ImVec4 c = color;
+        c.w *= alpha(t);
+        if (c.w > 0.004f)
+            dl->AddQuadFilled(ImVec2(x + lean, a.y), ImVec2(x + lean + w, a.y), ImVec2(x + w, b.y), ImVec2(x, b.y), ImGui::GetColorU32(c));
+        x += w + gap;
+    }
+}
+
+// Ink extent of text drawn at x = 0 in the current font: (left, right).
+ImVec2 ink(const char* str, float tracking = 0)
+{
+    ImFontBaked* baked = ImGui::GetFontBaked();
+    float pen = 0, left = 0, right = 0;
+    for (const char* p = str; *p; p++) {
+        const ImFontGlyph* g = baked->FindGlyph(ImWchar(*p));
+        if (p == str) left = pen + g->X0;
+        right = pen + g->X1;
+        pen += g->AdvanceX + (p[1] ? tracking : 0);
+    }
+    return ImVec2(left, right);
+}
+
+// Draws str with extra tracking between glyphs. One AddText run, then each glyph's quad is moved
+// along: drawing glyph by glyph would snap each one to a pixel and space them unevenly.
+void tracked(ImDrawList* dl, ImVec2 pos, ImU32 color, const char* str, float tracking)
+{
+    ImFontBaked* baked = ImGui::GetFontBaked();
+    int vtx = dl->VtxBuffer.Size;
+    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), pos, color, str);
+    int i = 0;
+    for (const char* p = str; *p; p++, i++) {
+        const ImFontGlyph* g = baked->FindGlyph(ImWchar(*p));
+        if (!g->Visible) continue;
+        for (int k = 0; k < 4 && vtx < dl->VtxBuffer.Size; k++) dl->VtxBuffer[vtx++].pos.x += i * tracking;
+    }
+}
+
+// The SWML lockup: dim bars, the wordmark F px tall (font size), the subtitle tracked to its
+// width. top_left is the top-left of the bars; returns the lockup's size.
+ImVec2 logo(ImDrawList* dl, ImVec2 top_left, float F, bool measure_only = false)
+{
+    const float pad_y = 0.10f * F, bar_left = 0.40f * F, bar_right = 1.10f * F;
+    ImGui::PushFont(font, F * em_px);
+    ImFontBaked* big = ImGui::GetFontBaked();
+    const float cap = F * 0.70f; // Chakra Petch cap height is 700/1000
+    ImVec2 word = ink("SWML");
+    ImGui::PopFont();
+    const float sub_size = 0.205f * F;
+    ImGui::PushFont(font, sub_size * em_px);
+    ImVec2 sub_plain = ink("STORMWORKS MOD LOADER");
+    const float tracking = ((word.y - word.x) - (sub_plain.y - sub_plain.x)) / 20.0f;
+    ImVec2 sub = ink("STORMWORKS MOD LOADER", tracking);
+    ImFontBaked* small = ImGui::GetFontBaked();
+    ImGui::PopFont();
+
+    const float width = bar_left + (word.y - word.x) + bar_right;
+    const float baseline = top_left.y + pad_y + cap;
+    const float sub_baseline = baseline + 0.13f * F + 0.70f * sub_size;
+    const float height = sub_baseline - top_left.y + 0.04f * F;
+    if (measure_only) return ImVec2(width, height);
+
+    bar_run(dl, top_left, ImVec2(top_left.x + width, baseline + pad_y), 0.10f * F, true, stripe_dim,
+            [](float t) { return t <= 0.55f ? 1.0f : std::max(0.0f, 1.0f - (t - 0.55f) / 0.45f); });
+
+    const float word_x = top_left.x + bar_left - word.x;
+    int start = dl->VtxBuffer.Size;
+    dl->AddText(font, F * em_px, ImVec2(word_x, baseline - big->Ascent), ImGui::GetColorU32(accent), "SWML");
+    shear(dl, start, baseline, text_skew);
+
+    ImGui::PushFont(font, sub_size * em_px);
+    start = dl->VtxBuffer.Size;
+    tracked(dl, ImVec2(top_left.x + bar_left - sub.x, sub_baseline - small->Ascent), ImGui::GetColorU32(accent),
+            "STORMWORKS MOD LOADER", tracking);
+    shear(dl, start, sub_baseline, text_skew);
+    ImGui::PopFont();
+    return ImVec2(width, height);
+}
+
+// The header's yellow speed stripes: widening to the right, fading in from the left.
+void stripes(ImDrawList* dl, ImVec2 a, ImVec2 b, float gap)
+{
+    bar_run(dl, a, b, gap, false, accent, [](float t) { return std::min(1.0f, t / 0.45f); });
+}
+
+// The usual "opens elsewhere" icon: a box with an arrow leaving its top-right corner. pos is the
+// top-left of an s x s square.
+void link_icon(ImDrawList* dl, ImVec2 pos, float s, ImU32 color)
+{
+    const float t = std::max(1.0f, s * 0.12f);
+    auto at = [&](float x, float y) { return ImVec2(pos.x + x * s, pos.y + y * s); };
+    ImVec2 box[5] = {at(0.42f, 0.18f), at(0.04f, 0.18f), at(0.04f, 0.96f), at(0.82f, 0.96f), at(0.82f, 0.58f)};
+    dl->AddPolyline(box, 5, color, ImDrawFlags_None, t);
+    dl->AddLine(at(0.40f, 0.60f), at(0.96f, 0.04f), color, t);
+    ImVec2 head[3] = {at(0.58f, 0.04f), at(0.96f, 0.04f), at(0.96f, 0.42f)};
+    dl->AddPolyline(head, 3, color, ImDrawFlags_None, t);
+}
+
+struct ButtonLook {
+    float font_px = 17;  // Chakra Petch size, before ui scale
+    float cut = 0;
+    bool link = false;   // trailing link icon
+};
+
+// The site's .btn: a parallelogram with italic Chakra Petch; primary is the yellow one.
+bool button(const char* label, ImVec2 size, bool primary, float scale, ButtonLook look = {})
+{
+    ImGui::PushFont(font, look.font_px * scale);
+    ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
+    const float icon = look.link ? label_size.y * 0.62f : 0.0f, icon_gap = look.link ? label_size.y * 0.35f : 0.0f;
+    if (size.x <= 0) size.x = label_size.x + icon_gap + icon + 44 * scale;
+    if (size.y <= 0) size.y = label_size.y + 16 * scale;
+    const float cut = look.cut > 0 ? look.cut * scale : 0;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    bool pressed = ImGui::InvisibleButton(label, size);
+    bool hovered = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
+    ImVec4 fill = primary ? (hovered ? accent_hi : accent) : (held ? line_hi : hovered ? line : panel);
+    if (primary && held) fill = accent;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 q[4] = {ImVec2(p.x + cut, p.y), ImVec2(p.x + size.x, p.y), ImVec2(p.x + size.x - cut, p.y + size.y), ImVec2(p.x, p.y + size.y)};
+    dl->AddConvexPolyFilled(q, 4, ImGui::GetColorU32(fill));
+    if (!primary) dl->AddPolyline(q, 4, ImGui::GetColorU32(line_hi), ImDrawFlags_Closed, 1.0f);
+    if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible)
+        dl->AddPolyline(q, 4, ImGui::GetColorU32(accent_hi), ImDrawFlags_Closed, 2.0f);
+    const ImU32 ink_color = ImGui::GetColorU32(primary ? accent_ink : text);
+    const float group = label_size.x + icon_gap + icon;
+    ImVec2 at(p.x + (size.x - group) * 0.5f, p.y + (size.y - label_size.y) * 0.5f);
+    dl->AddText(at, ink_color, label, std::strstr(label, "##")); // text after ## is the id
+    if (look.link) link_icon(dl, ImVec2(at.x + label_size.x + icon_gap, p.y + (size.y - icon) * 0.5f), icon, ink_color);
+    ImGui::PopFont();
+    return pressed;
+}
+
+// A text link in the site's link colour, underlined on hover, with the link icon after it.
+bool link(const char* label)
+{
+    ImVec2 label_size = ImGui::CalcTextSize(label);
+    const float icon = label_size.y * 0.62f, gap = label_size.y * 0.3f;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    bool pressed = ImGui::InvisibleButton(label, ImVec2(label_size.x + gap + icon, label_size.y));
+    bool hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const ImU32 color = ImGui::GetColorU32(hovered ? sea_hi : sea);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddText(p, color, label);
+    if (hovered) dl->AddLine(ImVec2(p.x, p.y + label_size.y), ImVec2(p.x + label_size.x, p.y + label_size.y), color, 1.0f);
+    link_icon(dl, ImVec2(p.x + label_size.x + gap, p.y + (label_size.y - icon) * 0.5f), icon, color);
+    return pressed;
+}
+
+void apply_style(ImGuiStyle& style)
+{
+    style.WindowRounding = 0.0f;
+    style.ChildRounding = 0.0f;
+    style.FrameRounding = 2.0f;
+    style.PopupRounding = 2.0f;
+    style.GrabRounding = 2.0f;
+    style.TabRounding = 0.0f;
+    style.ScrollbarRounding = 2.0f;
+    style.WindowBorderSize = 0.0f;
+    style.FrameBorderSize = 1.0f; // text boxes and buttons stay visible on any panel
+    style.PopupBorderSize = 1.0f;
+    style.TabBarOverlineSize = 2.0f;
+    ImVec4* c = style.Colors;
+    c[ImGuiCol_Text] = text;
+    c[ImGuiCol_TextDisabled] = muted;
+    c[ImGuiCol_WindowBg] = bg;
+    c[ImGuiCol_ChildBg] = bg2;
+    c[ImGuiCol_PopupBg] = bg2;
+    c[ImGuiCol_Border] = line;
+    c[ImGuiCol_FrameBg] = panel;
+    c[ImGuiCol_FrameBgHovered] = line;
+    c[ImGuiCol_FrameBgActive] = line_hi;
+    c[ImGuiCol_TitleBg] = panel;
+    c[ImGuiCol_TitleBgActive] = panel;
+    c[ImGuiCol_TitleBgCollapsed] = panel;
+    c[ImGuiCol_ModalWindowDimBg] = rgb(0x05080b, 0.70f);
+    c[ImGuiCol_ScrollbarBg] = bg2;
+    c[ImGuiCol_ScrollbarGrab] = line;
+    c[ImGuiCol_ScrollbarGrabHovered] = line_hi;
+    c[ImGuiCol_ScrollbarGrabActive] = muted;
+    c[ImGuiCol_CheckMark] = accent;
+    c[ImGuiCol_SliderGrab] = accent;
+    c[ImGuiCol_SliderGrabActive] = accent_hi;
+    c[ImGuiCol_Button] = panel;
+    c[ImGuiCol_ButtonHovered] = line;
+    c[ImGuiCol_ButtonActive] = line_hi;
+    c[ImGuiCol_Header] = rgb(0xffb020, 0.18f);   // selected mod row
+    c[ImGuiCol_HeaderHovered] = line;
+    c[ImGuiCol_HeaderActive] = rgb(0xffb020, 0.26f);
+    c[ImGuiCol_Separator] = line;
+    c[ImGuiCol_SeparatorHovered] = line_hi;
+    c[ImGuiCol_SeparatorActive] = accent;
+    c[ImGuiCol_ResizeGrip] = line;
+    c[ImGuiCol_ResizeGripHovered] = line_hi;
+    c[ImGuiCol_ResizeGripActive] = accent;
+    c[ImGuiCol_Tab] = bg2;
+    c[ImGuiCol_TabHovered] = line;
+    c[ImGuiCol_TabSelected] = panel;
+    c[ImGuiCol_TabSelectedOverline] = accent;
+    c[ImGuiCol_TabDimmed] = bg2;
+    c[ImGuiCol_TabDimmedSelected] = panel;
+    c[ImGuiCol_TabDimmedSelectedOverline] = accent;
+    c[ImGuiCol_TableHeaderBg] = panel;
+    c[ImGuiCol_TableBorderStrong] = line;
+    c[ImGuiCol_TableBorderLight] = line;
+    c[ImGuiCol_TableRowBg] = rgb(0, 0.0f);
+    c[ImGuiCol_TableRowBgAlt] = rgb(0xffffff, 0.02f);
+    c[ImGuiCol_TextSelectedBg] = rgb(0xffb020, 0.30f);
+    c[ImGuiCol_NavCursor] = accent;
+}
+} // namespace brand
+
+void load_brand_font(float scale)
+{
+    ImFontConfig config;
+    config.FontDataOwnedByAtlas = false; // static data
+    std::snprintf(config.Name, sizeof(config.Name), "Chakra Petch Bold Italic");
+    brand::font = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(swml_brand::font),
+                                                             int(sizeof(swml_brand::font)), 16.0f * scale, &config);
+}
+
 } // namespace
 
 int run(const std::wstring& root, const std::wstring& game_cmd)
@@ -631,25 +907,22 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 4.0f;
-    style.FrameRounding = 3.0f;
-    style.GrabRounding = 3.0f;
-    style.ScrollbarRounding = 3.0f;
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.11f, 0.13f, 1.0f);
-    style.Colors[ImGuiCol_ChildBg] = ImVec4(0.13f, 0.14f, 0.17f, 1.0f);
-    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.18f, 0.20f, 0.24f, 1.0f);
-    style.Colors[ImGuiCol_Header] = ImVec4(0.22f, 0.36f, 0.55f, 1.0f);
-    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.26f, 0.44f, 0.66f, 1.0f);
-    style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.22f, 0.36f, 0.55f, 1.0f);
-    style.Colors[ImGuiCol_Button] = ImVec4(0.22f, 0.36f, 0.55f, 1.0f);
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.28f, 0.47f, 0.71f, 1.0f);
-    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.18f, 0.30f, 0.47f, 1.0f);
-    style.Colors[ImGuiCol_CheckMark] = ImVec4(0.55f, 0.78f, 1.0f, 1.0f);
+    brand::apply_style(style);
+
+#ifndef _WIN32
+    // Windows takes the window icon from the exe's icon resource; elsewhere hand SDL the pixels.
+    if (SDL_Surface* icon = SDL_CreateSurfaceFrom(swml_brand::icon64_size, swml_brand::icon64_size, SDL_PIXELFORMAT_RGBA32,
+                                                  const_cast<unsigned char*>(swml_brand::icon64), swml_brand::icon64_size * 4)) {
+        SDL_SetWindowIcon(window, icon);
+        SDL_DestroySurface(icon);
+    }
+#endif
 
     float scale = SDL_GetWindowDisplayScale(window);
     if (!(scale > 0.0f)) scale = 1.0f;
     app.ui_scale = scale;
     load_fonts(scale);
+    load_brand_font(scale);
     style.ScaleAllSizes(scale);
 
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
@@ -688,40 +961,78 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
         bool idle = !app.installing;
         auto* sel = app.selected_mod();
 
-        // --- top toolbar ---------------------------------------------------------------------------
-        if (ImGui::Button("Diagnostics")) {
-            std::wstring error;
-            auto path = (fs::path(app.model.root) / "logs" / "doctor.json").wstring();
-            if (swml_manager::doctor(app.model.root, path, error)) swml_platform::open_text_file(path);
-            else app.open_popup(L"SWML", error);
-            app.reload_mods();
-        }
-        ImGui::SameLine(0, spacing);
-        ImGui::BeginDisabled(!idle || app.checking);
-        if (ImGui::Button("Check for updates")) app.start_update_check();
-        ImGui::EndDisabled();
-        ImGui::SameLine(0, spacing);
-        ImGui::BeginDisabled(!idle || !sel || !app.model.can_update(*sel, app.index, app.have_index));
-        if (ImGui::Button("Update mod")) app.start_updates({*app.model.offered_update(*sel, app.index, app.have_index)});
-        ImGui::EndDisabled();
-        ImGui::SameLine(0, spacing);
-        bool any_update = std::any_of(app.model.mods.begin(), app.model.mods.end(), [&](const Mod& m) { return app.model.can_update(m, app.index, app.have_index); });
-        ImGui::BeginDisabled(!idle || !any_update);
-        if (ImGui::Button("Update all")) {
-            std::vector<swml_updates::Entry> entries;
-            for (const Mod& m : app.model.mods) if (app.model.can_update(m, app.index, app.have_index)) entries.push_back(*app.model.offered_update(m, app.index, app.have_index));
-            app.start_updates(std::move(entries));
-        }
-        ImGui::EndDisabled();
-        if (app.show_notice) {
-            ImGui::SameLine(0, spacing);
-            if (ImGui::Button(u8(app.notice_text).c_str())) swml_platform::open_external(wide(app.index.loader_url));
+        // --- header: the logo, the update buttons, then the site's yellow speed stripes ----------------
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const float F = 46 * scale;               // wordmark size (em)
+            const float pad = style.WindowPadding.x;  // the bars run off the window's left edge
+            ImVec2 origin = ImGui::GetCursorScreenPos();
+            // The window clips its padding; the bars and stripes are meant to touch the window edges.
+            dl->PushClipRect(viewport->WorkPos, ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y));
+            ImVec2 logo = brand::logo(dl, ImVec2(origin.x - pad, origin.y), F);
+            const float band_top = origin.y, band_bottom = origin.y + 0.9f * F; // the bars' height
+            // Update controls beside the wordmark; catalogue action at the far end of the banner.
+            const int rows = 3;
+            const float row_gap = 3 * scale;
+            const float row_h = std::floor((logo.y - row_gap * (rows - 1)) / rows);
+            const brand::ButtonLook small{row_h * 0.92f / scale, -1, false};
+            const brand::ButtonLook small_link{small.font_px, -1, true};
+            const float step = 0;
+            const float stack_left = origin.x - pad + logo.x - 0.55f * F;
+            std::string first = app.show_notice ? u8(app.notice_text) : app.checking ? "Checking..." : "Check for updates";
+            ImGui::PushFont(brand::font, small.font_px * scale);
+            const float stack_w = std::max({ImGui::CalcTextSize(first.c_str()).x + (app.show_notice ? row_h : 0.0f),
+                                            ImGui::CalcTextSize("Check for updates").x,
+                                            ImGui::CalcTextSize("Website").x + row_h}) + 30 * scale;
+            ImGui::PopFont();
+            auto row = [&](int i) { ImGui::SetCursorScreenPos(ImVec2(stack_left + (rows - 1 - i) * step, origin.y + i * (row_h + row_gap))); };
+
+            row(0);
+            if (app.show_notice) {
+                // A newer loader is out: this row becomes the yellow link to it.
+                if (brand::button((first + "##notice").c_str(), ImVec2(stack_w, row_h), true, scale, small_link))
+                    swml_platform::open_external(wide(app.index.loader_url));
+            } else {
+                ImGui::BeginDisabled(!idle || app.checking);
+                if (brand::button((first + "##check").c_str(), ImVec2(stack_w, row_h), false, scale, small)) app.start_update_check();
+                ImGui::EndDisabled();
+            }
+            row(1);
+            bool any_update = std::any_of(app.model.mods.begin(), app.model.mods.end(), [&](const Mod& m) { return app.model.can_update(m, app.index, app.have_index); });
+            ImGui::BeginDisabled(!idle || !any_update);
+            if (brand::button("Update all", ImVec2(stack_w, row_h), false, scale, small)) {
+                std::vector<swml_updates::Entry> entries;
+                for (const Mod& m : app.model.mods) if (app.model.can_update(m, app.index, app.have_index)) entries.push_back(*app.model.offered_update(m, app.index, app.have_index));
+                app.start_updates(std::move(entries));
+            }
+            ImGui::EndDisabled();
+            row(2);
+            if (brand::button("Website", ImVec2(stack_w, row_h), false, scale, small_link))
+                swml_platform::open_external(L"https://swml.kivts.net");
+
+            const float stripes_left = stack_left + (rows - 1) * step + stack_w + 18 * scale;
+            const float browse_width = 178 * scale, browse_height = band_bottom - band_top;
+            const float browse_lean = browse_height * brand::bar_skew;
+            const float browse_left = viewport->WorkPos.x + viewport->WorkSize.x - browse_width - pad;
+            const float stripes_right = browse_left + browse_lean - 0.10f * F;
+            if (stripes_right - stripes_left > 80 * scale)
+                brand::stripes(dl, ImVec2(stripes_left, band_top), ImVec2(stripes_right, band_bottom), 0.10f * F);
+            ImGui::SetCursorScreenPos(ImVec2(browse_left, band_top));
+            if (brand::button("BROWSE MODS", ImVec2(browse_width, browse_height), true, scale, {17, browse_lean / scale, false})) {
+                app.catalogue_open = true;
+                if (!app.have_index) app.start_update_check();
+            }
+            dl->PopClipRect();
+            ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + logo.y));
+            ImGui::Dummy(ImVec2(0, 2 * scale));
         }
 
         ImGui::Separator();
 
         // --- main area: mod list + details -----------------------------------------------------------
-        float footer_height = (28 + 28 + 28 + 24) * scale;
+        const float play_height = 38 * scale;
+        float footer_height = ImGui::GetFrameHeightWithSpacing() + play_height + ImGui::GetTextLineHeight() +
+                              3 * style.ItemSpacing.y + 4 * scale;
         ImVec2 area = ImGui::GetContentRegionAvail();
         float list_width = std::min(400 * scale, area.x * 0.45f);
         float body_height = area.y - footer_height;
@@ -862,13 +1173,17 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
         }
         ImGui::EndChild();
 
-        // --- footer ------------------------------------------------------------------------------------
+        // --- footer: actions on the selected mod, troubleshooting on the right, then Play -----------------
         ImGui::BeginDisabled(!idle);
         if (ImGui::Button("Add mod...")) app.add_mod();
         ImGui::EndDisabled();
         ImGui::SameLine(0, spacing);
         ImGui::BeginDisabled(!idle || !sel);
         if (ImGui::Button("Remove")) app.remove_mod();
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, spacing);
+        ImGui::BeginDisabled(!idle || !sel || !app.model.can_update(*sel, app.index, app.have_index));
+        if (ImGui::Button("Update mod")) app.start_updates({*app.model.offered_update(*sel, app.index, app.have_index)});
         ImGui::EndDisabled();
         ImGui::SameLine(0, spacing);
         ImGui::BeginDisabled(!sel);
@@ -878,6 +1193,20 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
         ImGui::BeginDisabled(!sel);
         if (ImGui::Button("Settings")) app.focus_settings = true;
         ImGui::EndDisabled();
+        {
+            const float right = ImGui::CalcTextSize("Diagnostics").x + ImGui::CalcTextSize("Open logs").x +
+                                4 * style.FramePadding.x + spacing;
+            ImGui::SameLine(0, spacing);
+            float room = ImGui::GetContentRegionAvail().x - right;
+            if (room > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room);
+        }
+        if (ImGui::Button("Diagnostics")) {
+            std::wstring error;
+            auto path = (fs::path(app.model.root) / "logs" / "doctor.json").wstring();
+            if (swml_manager::doctor(app.model.root, path, error)) swml_platform::open_text_file(path);
+            else app.open_popup(L"SWML", error);
+            app.reload_mods();
+        }
         ImGui::SameLine(0, spacing);
         if (ImGui::Button("Open logs")) {
             auto logs = (fs::path(app.model.root) / "logs").wstring();
@@ -885,27 +1214,95 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
             fs::create_directories(fs::path(logs), ec);
             swml_platform::open_external(logs);
         }
-        if (!app.update_status.empty()) {
-            ImGui::SameLine(0, 12 * scale);
-            ImGui::TextDisabled("%s", u8(app.update_status).c_str());
-        }
 
-        ImGui::Spacing();
+        ImGui::Dummy(ImVec2(0, 2 * scale));
         bool playable = idle && !app.game_cmd.empty();
+        const float play_y = ImGui::GetCursorPosY();
         ImGui::BeginDisabled(!playable);
-        if (ImGui::Button("Play", ImVec2(120 * scale, 0))) app.request_play(true);
+        if (brand::button("PLAY", ImVec2(150 * scale, play_height), true, scale)) app.request_play(true);
         ImGui::SameLine(0, spacing);
-        if (ImGui::Button("Play without mods", ImVec2(150 * scale, 0))) app.request_play(false);
+        if (brand::button("PLAY WITHOUT MODS", ImVec2(0, play_height), false, scale)) app.request_play(false);
         ImGui::EndDisabled();
-        ImGui::SameLine(0, spacing);
+        ImGui::SameLine(0, 14 * scale);
+        ImGui::SetCursorPosY(play_y + (play_height - ImGui::GetFrameHeight()) * 0.5f);
         if (ImGui::Button("Copy Steam launch option")) app.copy_launch_option();
+        ImGui::SetCursorPosY(play_y + play_height + style.ItemSpacing.y);
         ImGui::TextDisabled("%s", app.game_cmd.empty()
             ? "Manager only: start Stormworks from Steam to play (set the launch option first)."
             : "Changes apply the next time the game starts.");
+        if (!app.update_status.empty()) {
+            ImGui::SameLine(0, 18 * scale);
+            ImGui::PushStyleColor(ImGuiCol_Text, brand::accent);
+            ImGui::TextUnformatted(u8(app.update_status).c_str());
+            ImGui::PopStyleColor();
+        }
+        {
+            const char* discord = "SWML Discord";
+            const float need = ImGui::CalcTextSize(discord).x + ImGui::GetTextLineHeight();
+            ImGui::SameLine(0, 18 * scale);
+            float room = ImGui::GetContentRegionAvail().x - need;
+            if (room > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room);
+            if (brand::link(discord)) swml_platform::open_external(L"https://discord.gg/bX4RzunsxC");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("discord.gg/bX4RzunsxC");
+        }
 
         ImGui::End();
 
         // --- popups --------------------------------------------------------------------------------------
+        if (app.catalogue_open) ImGui::OpenPopup("Browse mods##catalogue");
+        ImGui::SetNextWindowSize(ImVec2(std::min(820 * scale, viewport->WorkSize.x - 24 * scale),
+                                      std::min(600 * scale, viewport->WorkSize.y - 24 * scale)), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal("Browse mods##catalogue", &app.catalogue_open)) {
+            ImGui::SetNextItemWidth(std::max(120 * scale, ImGui::GetContentRegionAvail().x - 130 * scale));
+            ImGui::InputTextWithHint("##cataloguesearch", "Search mods...", app.catalogue_filter, sizeof(app.catalogue_filter));
+            ImGui::SameLine();
+            ImGui::BeginDisabled(app.checking || app.installing);
+            if (brand::button("REFRESH", ImVec2(0, 28 * scale), false, scale)) app.start_update_check();
+            ImGui::EndDisabled();
+            ImGui::TextWrapped("%s", app.update_status.empty() ? "Choose a mod to download and install." : u8(app.update_status).c_str());
+            ImGui::Separator();
+            ImGui::BeginChild("##cataloguerows", ImVec2(0, -40 * scale));
+            if (!app.have_index) ImGui::TextWrapped("%s", app.checking ? "Loading available mods..." : "Catalogue unavailable. Use Refresh to try again.");
+            ImGuiTextFilter filter;
+            std::strncpy(filter.InputBuf, app.catalogue_filter, sizeof(filter.InputBuf) - 1);
+            filter.Build();
+            int visible = 0;
+            for (const auto& [id, entry] : app.index.mods) {
+                std::string searchable = entry.name + " " + id + " " + entry.summary;
+                if (!filter.PassFilter(searchable.c_str())) continue;
+                ++visible;
+                ImGui::PushID(id.c_str());
+                auto installed = std::find_if(app.model.mods.begin(), app.model.mods.end(), [&](const Mod& m) { return u8(m.id) == id; });
+                bool present = installed != app.model.mods.end();
+                bool newer = present && swml_updates::newer(entry.version, u8(installed->version));
+                ImGui::Spacing();
+                ImGui::TextColored(brand::accent, "%s", entry.name.c_str());
+                ImGui::TextDisabled("Available: v%s%s", entry.version.c_str(), entry.obsolete ? " - OBSOLETE" : "");
+                ImGui::TextWrapped("%s", entry.summary.empty() ? "Description not supplied by the catalogue. See the GitHub page for details." : entry.summary.c_str());
+                if (!entry.multiplayer.empty()) ImGui::TextDisabled("Multiplayer: %s", mp_text(wide(entry.multiplayer)));
+                if (entry.api > SWML_API_VERSION) ImGui::TextDisabled("Requires a newer SWML");
+                if (entry.obsolete) ImGui::TextWrapped("Obsolete: this functionality is included in SWML. No separate install is needed.");
+                ImGui::BeginDisabled(app.checking || app.installing || entry.api > SWML_API_VERSION || entry.obsolete || (present && !newer));
+                if (ImGui::Button(entry.obsolete ? "Obsolete" : !present ? "Install" : newer ? "Update" : "Installed", ImVec2(130 * scale, 30 * scale)))
+                    app.start_updates({entry}, !present);
+                ImGui::EndDisabled();
+                if (!entry.homepage.empty()) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("GitHub", ImVec2(90 * scale, 30 * scale))) swml_platform::open_external(wide(entry.homepage));
+                }
+                if (present) { ImGui::SameLine(); ImGui::TextDisabled("Installed v%s", u8(installed->version).c_str()); }
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::PopID();
+            }
+            if (app.have_index && !visible) ImGui::TextDisabled("No mods match your search.");
+            ImGui::EndChild();
+            if (brand::button("CLOSE", ImVec2(110 * scale, 30 * scale), false, scale)) {
+                app.catalogue_open = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
         for (size_t i = 0; i < app.popups.size(); i++) ImGui::OpenPopup(app.popups[i].id.c_str());
         for (size_t i = 0; i < app.popups.size();) {
             auto& popup = app.popups[i];
@@ -961,7 +1358,7 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
         }
 
         ImGui::Render();
-        SDL_SetRenderDrawColor(renderer, 20, 22, 26, 255);
+        SDL_SetRenderDrawColor(renderer, 11, 16, 22, 255); // brand::bg
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);

@@ -323,18 +323,21 @@ bool open_text_file(const std::wstring& path)
     return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", L"notepad.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL)) > 32;
 }
 
-std::wstring pick_open_file(const std::wstring& title,
-                            const std::vector<std::pair<std::wstring, std::wstring>>& filters)
+std::optional<std::wstring> pick_open_file(const std::wstring& title,
+                                           const std::vector<std::pair<std::wstring, std::wstring>>& filters)
 {
-    std::wstring result;
-    if (!g_com_initialized) return result;
+    if (!g_com_initialized) return std::nullopt;
     IFileOpenDialog* dlg = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return result;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return std::nullopt;
+    std::optional<std::wstring> result;
     std::vector<COMDLG_FILTERSPEC> types;
     for (const auto& [description, pattern] : filters) types.push_back({description.c_str(), pattern.c_str()});
     if (!types.empty()) dlg->SetFileTypes(UINT(types.size()), types.data());
     dlg->SetTitle(title.c_str());
-    if (SUCCEEDED(dlg->Show(nullptr))) {
+    HRESULT shown = dlg->Show(nullptr);
+    if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) result = std::wstring(); // closed without picking
+    if (SUCCEEDED(shown)) {
+        result = std::wstring();
         IShellItem* item = nullptr;
         if (SUCCEEDED(dlg->GetResult(&item))) {
             wchar_t* path = nullptr;

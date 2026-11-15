@@ -61,7 +61,17 @@ Index parse_index(std::string_view json) {
     if (!mods || !mods->is_object()) fail("index has no mods object");
     for (const auto& [id, value] : mods->object()) {
         Entry entry; entry.id = id;
+        entry.name = value.text("name"); entry.summary = value.text("summary"); entry.multiplayer = value.text("multiplayer");
+        if (entry.name.empty()) entry.name = id;
         entry.version = value.text("version"); entry.url = value.text("url"); entry.sha256 = value.text("sha256");
+        entry.homepage = value.text("homepage");
+        if (entry.homepage.empty() && entry.url.starts_with(kAllowedPrefix)) {
+            auto end = entry.url.find('/', kAllowedPrefix.size());
+            if (end != std::string::npos) end = entry.url.find('/', end + 1);
+            if (end != std::string::npos) entry.homepage = entry.url.substr(0, end);
+        }
+        if (!entry.homepage.empty() && !allowed_url(entry.homepage)) fail(id + ": invalid GitHub page");
+        if (auto* obsolete = value.find("obsolete")) entry.obsolete = obsolete->is_bool() && obsolete->boolean();
         if (!swml_manifest::valid_id(id)) fail("index has an invalid mod id: " + id);
         if (!swml_version::parse(entry.version)) fail(id + ": invalid version in index");
         if (!allowed_url(entry.url)) fail(id + ": index URL must be on https://github.com/");

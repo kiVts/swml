@@ -241,8 +241,8 @@ bool open_external(const std::wstring& target)
 
 bool open_text_file(const std::wstring& path) { return open_external(path); }
 
-std::wstring pick_open_file(const std::wstring& title,
-                            const std::vector<std::pair<std::wstring, std::wstring>>& filters)
+std::optional<std::wstring> pick_open_file(const std::wstring& title,
+                                           const std::vector<std::pair<std::wstring, std::wstring>>& filters)
 {
     // Desktop file pickers, in order of likelihood. The UI falls back to a path prompt when
     // none is installed (e.g. gamescope session on Steam Deck).
@@ -262,18 +262,21 @@ std::wstring pick_open_file(const std::wstring& title,
         if (!kdialog_filter.empty()) kdialog_filter += L"\n";
         kdialog_filter += globs + L"|" + description;
     }
-    auto attempt = [&](const wchar_t* tool, std::vector<std::wstring> arguments) -> std::wstring {
+    // Both tools exit 0 with the path, or 1 when the user closes them; anything else means the tool
+    // isn't there or couldn't open a window, so try the next one.
+    auto attempt = [&](const wchar_t* tool, std::vector<std::wstring> arguments) -> std::optional<std::wstring> {
         auto result = run_process(tool, arguments, L"", 65536);
-        if (!result.started || result.exit_code != 0) return {};
-        return trim(result.output);
+        if (result.started && result.exit_code == 0) return trim(result.output);
+        if (result.started && result.exit_code == 1) return std::wstring();
+        return std::nullopt;
     };
     std::vector<std::wstring> zenity{L"--file-selection", L"--title=" + title};
     if (!zenity_filter.empty()) zenity.push_back(L"--file-filter=" + zenity_filter);
-    if (auto picked = attempt(L"zenity", zenity); !picked.empty()) return picked;
+    if (auto picked = attempt(L"zenity", zenity)) return picked;
     std::vector<std::wstring> kdialog{L"--getopenfile", L"--title", title};
     if (!kdialog_filter.empty()) kdialog.push_back(kdialog_filter);
-    if (auto picked = attempt(L"kdialog", kdialog); !picked.empty()) return picked;
-    return {};
+    if (auto picked = attempt(L"kdialog", kdialog)) return picked;
+    return std::nullopt;
 }
 
 } // namespace swml_platform

@@ -1,3 +1,5 @@
+4.7.5: Browse, download and install mods directly; refreshed catalogue and launcher controls.
+
 4.6.3: Fixed crashes at game start and right after loading a world.
 
 4.6.2: Installer automatically locates Stormworks across Steam libraries.

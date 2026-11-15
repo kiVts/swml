@@ -7,7 +7,7 @@
 namespace swml_updates {
 inline constexpr char kIndexUrl[] = "https://github.com/kiVts/swml/releases/download/index/index.json";
 
-struct Entry { std::string id, version, url, sha256; uint32_t api = 1; };
+struct Entry { std::string id, version, url, sha256; uint32_t api = 1; std::string name, summary, multiplayer, homepage; bool obsolete = false; };
 struct Index { std::string loader_version, loader_url; std::map<std::string, Entry> mods; };
 
 Index parse_index(std::string_view json);

@@ -5,6 +5,7 @@
 // Proton-hosted core agree on every file.
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -90,9 +91,10 @@ ProcessResult run_process(const std::wstring& program, const std::vector<std::ws
 bool open_external(const std::wstring& target);
 // Open a log/report in a text viewer (notepad on Windows, xdg-open elsewhere).
 bool open_text_file(const std::wstring& path);
-// Native file picker. filters: (description, "mod.ini;*.zip"). Empty result = cancelled/unavailable.
-std::wstring pick_open_file(const std::wstring& title,
-                            const std::vector<std::pair<std::wstring, std::wstring>>& filters);
+// Native file picker. filters: (description, "mod.ini;*.zip"). Returns the picked path, an empty
+// string when the user cancelled, or nullopt when no picker could be shown at all.
+std::optional<std::wstring> pick_open_file(const std::wstring& title,
+                                           const std::vector<std::pair<std::wstring, std::wstring>>& filters);
 
 // --- settings lock -------------------------------------------------------------------------------
 // Cross-process lock for one mod directory (named mutex on Windows, flock on POSIX).
