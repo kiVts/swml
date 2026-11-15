@@ -3,6 +3,7 @@
 #include "health.h"
 #include "native_ui.h"
 #include "swml_v2.h"
+#include "../launcher/loader_version.h"
 #include "multiplayer_gate.h"
 #include <map>
 #include <string>
@@ -50,7 +51,7 @@ void screen(const swml_ui_event* event, void*) {
         if (!native_version(text)) return; // Preserve unrelated text/another owner's edit.
         label.base = text;
     }
-    auto wanted = label.base + " | SWML V" SWML_SDK_VERSION " " +
+    auto wanted = label.base + " | SWML V" SWML_LOADER_VERSION " " +
         std::to_string(status.loaded_mods) + " mods loaded" + (status.fault_found ? ", fault found" : "");
     if (const auto* message = core_multiplayer_notice(); *message) wanted += std::string(" | ") + message;
     if (wanted == text) return;
@@ -72,3 +73,4 @@ bool core_status_install() {
     corelog("built-in SWML version and mod status display enabled");
     return true;
 }
+

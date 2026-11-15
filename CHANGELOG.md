@@ -1,3 +1,5 @@
+4.7.8: Match launcher and core release versions, including the in-game display.
+
 4.7.7: Download and install SWML updates in-app, then restart automatically with recovery backups.
 
 4.7.6: Restore original slanted launcher buttons while retaining the aligned mod catalogue entry.
