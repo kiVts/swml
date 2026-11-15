@@ -217,6 +217,8 @@ struct SettingsPanel {
 
 // --- background work -------------------------------------------------------------------------------
 struct WorkResult {
+    bool loader_update = false;
+    std::wstring loader_folder;
     bool adding = false;
     bool check = false;
     bool have_index = false;
@@ -337,6 +339,18 @@ struct App {
         }).detach();
     }
 
+    void start_loader_update()
+    {
+        if (checking || installing || !have_index) return;
+        installing = true;
+        update_status = L"Downloading SWML update... The launcher will close and reopen automatically.";
+        std::thread([this, root = model.root, offered = index] {
+            auto result = std::make_unique<WorkResult>(); result->loader_update = true;
+            swml_updates::download_loader_update(root, offered, result->loader_folder, result->error);
+            std::lock_guard lock(work_mutex); pending_work = std::move(result);
+        }).detach();
+    }
+
     void poll_work()
     {
         std::unique_ptr<WorkResult> result;
@@ -345,6 +359,15 @@ struct App {
             result = std::move(pending_work);
         }
         if (!result) return;
+        if (result->loader_update) {
+            installing = false;
+            if (result->loader_folder.empty() || !result->error.empty() ||
+                !swml_updates::launch_loader_installer(model.root, result->loader_folder, result->error)) {
+                update_status = L"SWML update was not installed.";
+                open_popup(L"SWML update failed", result->error); return;
+            }
+            quit_requested = true; return;
+        }
         if (result->check) {
             checking = false;
             if (!result->have_index) {
@@ -354,7 +377,7 @@ struct App {
             index = std::move(result->index);
             have_index = true;
             show_notice = swml_updates::newer(index.loader_version, SWML_LOADER_VERSION);
-            if (show_notice) notice_text = L"SWML " + wide(index.loader_version) + L" available";
+            if (show_notice) notice_text = L"Update SWML to " + wide(index.loader_version);
             reload_mods();
             auto count = std::count_if(model.mods.begin(), model.mods.end(), [&](const Mod& m) { return model.can_update(m, index, have_index); });
             update_status = count ? std::to_wstring(count) + (count == 1 ? L" update available." : L" updates available.") : L"Mods are up to date.";
@@ -989,9 +1012,10 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
 
             row(0);
             if (app.show_notice) {
-                // A newer loader is out: this row becomes the yellow link to it.
-                if (brand::button((first + "##notice").c_str(), ImVec2(stack_w, row_h), true, scale, small_link))
-                    swml_platform::open_external(wide(app.index.loader_url));
+                ImGui::BeginDisabled(!idle || app.checking);
+                if (brand::button((first + "##notice").c_str(), ImVec2(stack_w, row_h), true, scale, small)) app.start_loader_update();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Download, install and restart SWML. Close Stormworks first.");
+                ImGui::EndDisabled();
             } else {
                 ImGui::BeginDisabled(!idle || app.checking);
                 if (brand::button((first + "##check").c_str(), ImVec2(stack_w, row_h), false, scale, small)) app.start_update_check();

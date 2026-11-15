@@ -1,3 +1,5 @@
+4.7.7: Download and install SWML updates in-app, then restart automatically with recovery backups.
+
 4.7.6: Restore original slanted launcher buttons while retaining the aligned mod catalogue entry.
 
 4.7.5: Browse, download and install mods directly; refreshed catalogue and launcher controls.
