@@ -1,6 +1,10 @@
 # SWML
 
-[![Join Discord](https://img.shields.io/badge/Join-Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/bX4RzunsxC)
+[![Join Discord](https://swml.kivts.net/brand/badges/dark/discord.svg)](https://discord.gg/bX4RzunsxC)
+[![Download SWML](https://swml.kivts.net/brand/badges/dark/download-swml.svg)](https://github.com/kiVts/swml/releases/latest)
+[![SWML website](https://swml.kivts.net/brand/badges/dark/website.svg)](https://swml.kivts.net/)
+[![GitHub releases](https://swml.kivts.net/brand/badges/dark/github.svg)](https://github.com/kiVts/swml/releases)
+[![Support on Buy Me a Coffee](https://swml.kivts.net/brand/badges/dark/coffee.svg)](https://buymeacoffee.com/kivts)
 
 Stormworks Mod Loader: `swml.exe` (the mod window and launcher) and `swml_core.dll` (loaded into the game, it loads the mods).
 On Linux the mod window is a **native app** (`swml`, Dear ImGui + SDL3, Wayland or X11); the game itself still runs through Proton with the Windows loader.
