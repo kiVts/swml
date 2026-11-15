@@ -10,7 +10,6 @@ struct GameAddrs {
     uintptr_t key_handler = 0;
     uintptr_t update_fn = 0;
     uintptr_t keybind_getter = 0;
-    uint32_t off_editor_keyboard_focus = 0; // extracted from verified focused-key dispatch
     uintptr_t layout_fn = 0;     // rotation-labels overlay layout (called from update)
     uintptr_t project_fn = 0;    // world -> screen (called from layout)
 
@@ -61,6 +60,7 @@ struct GameAddrs {
     uintptr_t seat_outputs_fn = 0;   // per-tick: copies look (and axes) into the seat's outputs
     uint32_t off_seat_look = 0;      // float look x, y follows (turns)
     uint32_t off_seat_look_out = 0;
+    uint32_t off_editor_keyboard_focus = 0; // extracted from verified focused-key dispatch
 };
 
 enum : unsigned {
