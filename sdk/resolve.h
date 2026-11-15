@@ -10,6 +10,7 @@ struct GameAddrs {
     uintptr_t key_handler = 0;
     uintptr_t update_fn = 0;
     uintptr_t keybind_getter = 0;
+    uint32_t off_editor_keyboard_focus = 0; // extracted from verified focused-key dispatch
     uintptr_t layout_fn = 0;     // rotation-labels overlay layout (called from update)
     uintptr_t project_fn = 0;    // world -> screen (called from layout)
 
@@ -80,7 +81,7 @@ inline constexpr uint64_t kGameAddrsLayout =
 uint64_t game_addrs_layout(); // resolve.cpp's kGameAddrsLayout
 inline bool game_addrs_layout_ok() { return game_addrs_layout() == kGameAddrsLayout; }
 
-// SDK reusable native discovery. Startup/explicit feature activation only: scanning is expensive.
+// SDK v2 reusable native discovery. Startup/explicit feature activation only: scanning is expensive.
 // Patterns are space-separated hex bytes or ?/??. No result if malformed, absent or ambiguous.
 // section is one of .text/.rdata/.data. Results refer to the current executable, not another DLL.
 uintptr_t native_find_pattern(const char* pattern, const char* section = ".text");

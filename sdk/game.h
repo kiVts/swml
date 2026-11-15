@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 inline constexpr uintptr_t kGhidraImageBase = 0x140000000;
@@ -23,7 +24,10 @@ T game_ptr(uintptr_t ghidra_address)
     return reinterpret_cast<T>(game_live(ghidra_address));
 }
 
-// Pick the value for the running build: field offsets and the like that the update changed.
+size_t game_field(const char* owner, size_t original_offset);
+
+// Pick the value for the running build. Two builds only: on any later build it returns `ported` unchecked. Not for
+// struct offsets (use game_field); only for values a part verifies at run time before relying on them.
 template <typename T>
 T per_build(T original, T ported)
 {

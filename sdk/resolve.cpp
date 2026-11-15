@@ -1,4 +1,5 @@
 #include "resolve.h"
+#include "native_ui_focus.h"
 #include "log.h"
 
 #include <windows.h>
@@ -251,6 +252,14 @@ bool resolve_editor()
     if (default_x != kDefaultRotateXKey) return fail("key code check (rotate X default is no longer 'j')");
     r.key_handler = best_handler;
     r.keybind_getter = best_target;
+    uintptr_t kb, ke;
+    if (!function_range(r.key_handler, &kb, &ke)) return fail("editor key handler bounds");
+    const auto focus_dispatch = find(kb, ke, parse(kEditorKeyboardFocusPattern));
+    if (!focus_dispatch) return fail("editor keyboard focus dispatch");
+    r.off_editor_keyboard_focus = rd32(focus_dispatch + 3);
+    const auto ui_context = rd32(focus_dispatch + 25);
+    if (r.off_editor_keyboard_focus != ui_context + 0x190 || r.off_editor_keyboard_focus > 0x10000)
+        return fail("editor keyboard focus/context relationship");
 
     // World->screen: find the projection function among the layout function's calls.
     uintptr_t lb, le;

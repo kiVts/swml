@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
-project(swml_sdk LANGUAGES C CXX)
+project(swml_sdk VERSION 4.4.0 LANGUAGES C CXX)
 # The mod SDK (swml_modsdk/swml_lookup + swml_add_mod) targets the Windows game: MSVC x64 and the
 # generated per-build headers are required. On other platforms (native Linux launcher, mingw
 # cross-checks) it is skipped; the launcher itself doesn't link it.
-set(SWML_GAME_DATA_DIR "" CACHE PATH "Folder with port_table.h and port_sigs.h (generated, not in this repository)")
+set(SWML_GAME_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH "Folder with port_table.h and port_sigs.h (generated)")
 if(WIN32 AND MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND
-   EXISTS "${SWML_GAME_DATA_DIR}/port_table.h" AND EXISTS "${SWML_GAME_DATA_DIR}/port_sigs.h")
+   EXISTS "${SWML_GAME_DATA_DIR}/port_table.h" AND EXISTS "${SWML_GAME_DATA_DIR}/port_sigs.h" AND
+   EXISTS "${SWML_GAME_DATA_DIR}/port_fields.h")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   if(NOT TARGET swml_lookup)
     add_library(swml_lookup STATIC resolve.cpp)
@@ -14,8 +15,16 @@ if(WIN32 AND MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND
     target_compile_definitions(swml_lookup PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
     target_compile_options(swml_lookup PRIVATE /W4 /permissive- /utf-8)
   endif()
+  if(NOT TARGET swml_port)
+    add_library(swml_port STATIC port_runtime.cpp)
+    target_include_directories(swml_port PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${SWML_GAME_DATA_DIR}")
+    target_compile_features(swml_port PUBLIC cxx_std_20)
+    target_compile_definitions(swml_port PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+    target_compile_options(swml_port PRIVATE /W4 /permissive- /utf-8)
+  endif()
   if(NOT TARGET swml_modsdk)
     add_library(swml_modsdk STATIC swml_sdk.cpp gl_overlay.cpp gl_text.cpp gl_ui.cpp)
+    target_link_libraries(swml_modsdk PUBLIC swml_port)
     target_include_directories(swml_modsdk PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(swml_modsdk PUBLIC cxx_std_20)
     target_compile_definitions(swml_modsdk PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)

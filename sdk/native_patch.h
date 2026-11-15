@@ -51,14 +51,14 @@ inline bool mid_hook(uint8_t* at, const uint8_t* expected, size_t size, Handler 
     emit({0x50, 0x53, 0x51, 0x52, 0x55, 0x56, 0x57});
     emit({0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53});
     emit({0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57});             // push r12 r13 r14 r15
-    emit({0x48, 0x89, 0xE1});                                           // mov rcx, rsp (Registers*)
+    emit({0x48, 0x89, 0xE1});                                           // mov rcx, rsp      (Registers*)
     emit({0x48, 0x89, 0xE5});                                           // mov rbp, rsp
     emit({0x48, 0x83, 0xEC, 0x60});                                     // sub rsp, 0x60
     emit({0x48, 0x83, 0xE4, 0xF0});                                     // and rsp, -16
     for (uint8_t i = 0; i < 6; ++i)                                     // movups [rsp+i*16], xmmi
         emit({0x0F, 0x11, uint8_t(0x44 | i << 3), 0x24, uint8_t(i * 16)});
     emit({0x48, 0x89, 0xE2});
-    emit({0x48, 0x83, 0xEC, 0x20});                                     // sub rsp, 0x20 (shadow space)
+    emit({0x48, 0x83, 0xEC, 0x20});                                     // sub rsp, 0x20     (shadow space)
     emit({0x48, 0xB8});                                                 // mov rax, handler
     memcpy(p, &handler, 8);
     p += 8;

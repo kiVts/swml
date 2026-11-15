@@ -4,6 +4,8 @@
 #include "game.h"
 #include "hooks.h"
 #include "log.h"
+#include "port_fields.h"
+#include "port_runtime.h"
 #include "port_sigs.h"
 #include "port_table.h"
 #include "present.h"
@@ -13,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 #include <string>
 #include <unordered_map>
@@ -68,87 +71,10 @@ const wchar_t* mod_dir() { return g_api ? g_api->mod_dir(g_mod) : L"."; }
 
 uintptr_t game_base() { return g_api ? g_api->game_base() : 0; }
 
-static uint64_t sig_hash(const uint8_t* p, const SigFunc& f)
-{
-    uint64_t h = 0xcbf29ce484222325ull;
-    const SigSpan* span = kSigSpans + f.span_first;
-    const SigSpan* spans_end = span + f.span_count;
-    for (uint32_t i = 0; i < f.len; i++) {
-        while (span != spans_end && i >= span->off + span->len) span++;
-        uint8_t b = (span != spans_end && i >= span->off) ? 0 : p[i];
-        h = (h ^ b) * 0x100000001b3ull;
-    }
-    return h;
-}
-
-std::vector<PortRange> port_resolve_signatures(uintptr_t base, bool native)
-{
-    static_assert(kSigBuild == kPortToBuild, "port_sigs.h and port_table.h are from different builds");
-    std::vector<PortRange> out;
-    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
-    const IMAGE_DATA_DIRECTORY& ex = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-    auto* rf = reinterpret_cast<const RUNTIME_FUNCTION*>(base + ex.VirtualAddress);
-    size_t n_rf = ex.Size / sizeof(RUNTIME_FUNCTION);
-    std::unordered_multimap<uint32_t, uint32_t> by_len; // length -> start rva
-    by_len.reserve(n_rf);
-    for (size_t i = 0; i < n_rf; i++)
-        if (rf[i].EndAddress > rf[i].BeginAddress) by_len.emplace(rf[i].EndAddress - rf[i].BeginAddress, rf[i].BeginAddress);
-
-    std::vector<int64_t> live(std::size(kSigFuncs), -1);
-    for (size_t k = 0; k < std::size(kSigFuncs); k++) {
-        const SigFunc& f = kSigFuncs[k];
-        std::vector<uint32_t> hits;
-        auto [lo, hi] = by_len.equal_range(f.len);
-        for (auto it = lo; it != hi; ++it) {
-            auto* p = reinterpret_cast<const uint8_t*>(base + it->second);
-            bool pre = true;
-            for (int i = 0; i < 16 && pre; i++) pre = !(f.prefix_mask >> i & 1) || p[i] == f.prefix[i];
-            if (pre && sig_hash(p, f) == f.hash) hits.push_back(it->second);
-        }
-        std::sort(hits.begin(), hits.end());
-        if (hits.size() == f.equals) live[k] = hits[f.rank];
-    }
-
-    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
-    uintptr_t text_lo = 0, text_hi = 0;
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
-        if (!memcmp(sec[i].Name, ".text", 6)) text_lo = base + sec[i].VirtualAddress, text_hi = text_lo + sec[i].Misc.VirtualSize;
-
-    const SigRange* first = native ? std::begin(kSigNative) : std::begin(kSigRanges);
-    const SigRange* last = native ? std::end(kSigNative) : std::end(kSigRanges);
-    for (const SigRange* it = first; it != last; ++it) {
-        const SigRange& r = *it;
-        if (!r.size) continue;
-        int64_t at = -1;
-        if (r.kind == 0) {
-            at = r.a;
-        } else if (r.kind == 1) {
-            if (live[r.a] >= 0) at = live[r.a] + r.b;
-        } else if (r.kind == 2) {
-            const SigWindow& w = kSigWindows[r.a];
-            const uint16_t* pat = kSigWindowBytes + w.first;
-            int found = 0;
-            for (uintptr_t a = text_lo; a + w.len <= text_hi && found < 2; a++) {
-                auto* p = reinterpret_cast<const uint8_t*>(a);
-                uint32_t i = 0;
-                while (i < w.len && ((pat[i] & 0x100) || p[i] == pat[i])) i++;
-                if (i == w.len) at = static_cast<int64_t>(a - base), found++;
-            }
-            if (found != 1) at = -1;
-        } else if (live[r.a] >= 0) {
-            uintptr_t fn = base + static_cast<uintptr_t>(live[r.a]);
-            int32_t disp = *reinterpret_cast<const int32_t*>(fn + (r.b >> 16));
-            at = static_cast<int64_t>(fn + (r.b & 0xffff) - base) + disp + r.c;
-        }
-        if (at >= 0 && at < nt->OptionalHeader.SizeOfImage) out.push_back({r.old_rva, r.size, static_cast<uint32_t>(at)});
-    }
-    return out;
-}
-
 namespace {
 constexpr uint32_t kOriginalBuild = kPortFromBuild;
 uint32_t g_ported_to = 0;
-std::atomic<int> g_port_misses{0}; // game_live() calls that found no range (a part using one is switched off)
+std::atomic<int> g_port_misses{0}; // game_live()/game_field() calls that found nothing (a part using one is switched off)
 
 // One part's install(), with a crash (e.g. reading through an unmapped address) turned into a failed part instead of
 // the whole mod. No C++ objects in this frame, so SEH is allowed here.
@@ -188,40 +114,78 @@ bool is_table_build()
     return table;
 }
 
-// The game exe mapped again from disk as an image: the bytes before any mod's hooks patched them (the mods load one
-// after another, so the live image has the earlier mods' detours in it). Shared and read-only; never unmapped.
-uintptr_t pristine_image()
-{
-    static const uintptr_t view = [] {
-        wchar_t path[MAX_PATH];
-        if (!GetModuleFileNameW(reinterpret_cast<HMODULE>(game_base()), path, MAX_PATH)) return uintptr_t(0);
-        HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (f == INVALID_HANDLE_VALUE) return uintptr_t(0);
-        HANDLE m = CreateFileMappingW(f, nullptr, PAGE_READONLY | SEC_IMAGE_NO_EXECUTE, 0, 0, nullptr);
-        CloseHandle(f);
-        if (!m) return uintptr_t(0);
-        void* v = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0);
-        CloseHandle(m);
-        return reinterpret_cast<uintptr_t>(v);
-    }();
-    return view;
-}
-
+// The game exe mapped again from disk (port_runtime.h): the bytes before any mod's hooks patched them (the mods load
+// one after another, so the live image has the earlier mods' detours in it).
 uintptr_t signature_image()
 {
-    if (uintptr_t p = pristine_image()) return p;
-    swlog("port: could not map the game exe from disk; signatures read the live image (other mods' hooks may hide some)");
-    return game_base();
+    static const uintptr_t image = [] {
+        if (uintptr_t p = port_pristine_image(game_base())) return p;
+        swlog("port: could not map the game exe from disk; signatures read the live image (other mods' hooks may hide some)");
+        return game_base();
+    }();
+    return image;
 }
 
-std::vector<PortRange> resolve_by_signature() { return port_resolve_signatures(signature_image(), false); }
+// --- where the port data comes from ---------------------------------------------------------------------------
+// The core (swml_api port_*) resolves the port data it was built with once for every mod. This mod uses it when it is
+// newer than its own: a loader released for a new game build then ports mods built before that build. Its own data
+// stays the fallback (older core, or an address/field the core's data doesn't know).
+const swml_port_info* core_port()
+{
+    static swml_port_info info{};
+    static const bool ok = [] {
+        if (!SWML_API_HAS_PORT(g_api)) return false;
+        info.size = sizeof(info);
+        return g_api->port_info(&info) && info.original_build == kPortFromBuild;
+    }();
+    return ok ? &info : nullptr;
+}
 
-const std::vector<PortRange>& ranges()
+bool use_core_port()
+{
+    static const bool use = [] {
+        const swml_port_info* c = core_port();
+        if (!c || is_table_build()) return false; // this mod's own table is exact for the running build
+        return c->table_build == read_build(nullptr) || c->sig_build >= kSigBuild;
+    }();
+    return use;
+}
+
+std::vector<swml_port_range> core_ranges(int native)
+{
+    std::vector<swml_port_range> v(g_api->port_ranges(native, nullptr, 0));
+    v.resize(g_api->port_ranges(native, v.data(), v.size()));
+    return v;
+}
+
+std::vector<PortRange> found_only(const std::vector<swml_port_range>& v)
+{
+    std::vector<PortRange> out;
+    for (const swml_port_range& r : v)
+        if (r.new_rva != ~0u) out.push_back({r.old_rva, r.size, r.new_rva});
+    return out;
+}
+
+const std::vector<PortRange>& own_ranges()
 {
     static const std::vector<PortRange> v = [] {
         if (is_table_build()) return std::vector<PortRange>(std::begin(kPortRanges), std::end(kPortRanges));
-        return resolve_by_signature();
+        return port_resolve_signatures(signature_image(), false);
     }();
+    return v;
+}
+
+// Every range key the core's data has (found or not): an address outside all of them is unknown to the core.
+const std::vector<swml_port_range>& core_keys()
+{
+    static const std::vector<swml_port_range> v = use_core_port() ? core_ranges(0) : std::vector<swml_port_range>{};
+    return v;
+}
+
+// The ranges in use.
+const std::vector<PortRange>& ranges()
+{
+    static const std::vector<PortRange> v = use_core_port() ? found_only(core_keys()) : own_ranges();
     return v;
 }
 
@@ -234,6 +198,45 @@ const std::vector<PortRange>& by_new()
     }();
     return v;
 }
+
+// Ranges are few (one per address the sources name); the smallest containing range wins.
+template <typename R>
+const R* containing(const std::vector<R>& v, uint32_t rva)
+{
+    const R* best = nullptr;
+    for (const R& r : v)
+        if (rva >= r.old_rva && rva - r.old_rva < r.size && (!best || r.size < best->size)) best = &r;
+    return best;
+}
+
+const std::vector<PortField>& own_fields()
+{
+    static const std::vector<PortField> v = [] {
+        if (is_table_build() && kFieldBuild == kPortToBuild) return port_fields_compiled();
+        return port_resolve_fields(signature_image());
+    }();
+    return v;
+}
+
+const std::vector<PortField>& fields()
+{
+    static const std::vector<PortField> v = [] {
+        if (!use_core_port()) return own_fields();
+        std::vector<swml_port_field> c(g_api->port_fields(nullptr, 0));
+        c.resize(g_api->port_fields(c.data(), c.size()));
+        std::vector<PortField> out;
+        for (const swml_port_field& f : c) {
+            PortField p{};
+            memcpy(p.owner, f.owner, sizeof(p.owner));
+            p.owner[sizeof(p.owner) - 1] = 0;
+            p.original = f.original;
+            p.value = f.value;
+            out.push_back(p);
+        }
+        return out;
+    }();
+    return v;
+}
 } // namespace
 
 uint32_t game_build() { return read_build(nullptr); }
@@ -243,6 +246,12 @@ uintptr_t game_live_native(uintptr_t sig_build_address)
     uint32_t rva = static_cast<uint32_t>(sig_build_address - kGhidraImageBase);
     if (!g_api || game_build() == kOriginalBuild) return 0;
     if (is_table_build()) return game_base() + rva;
+    // The core's native ranges are keyed by its signatures' build: usable only when that is this mod's too.
+    if (use_core_port() && core_port()->sig_build == kSigBuild) {
+        static const std::vector<swml_port_range> native = core_ranges(1);
+        for (const swml_port_range& r : native)
+            if (r.old_rva == rva) return r.new_rva == ~0u ? 0 : game_base() + r.new_rva;
+    }
     static const std::vector<PortRange> native = port_resolve_signatures(signature_image(), true);
     for (const PortRange& r : native)
         if (r.old_rva == rva) return game_base() + r.new_rva;
@@ -271,30 +280,54 @@ void mod_ported_to(uint32_t build_timestamp)
 {
     g_ported_to = build_timestamp;
     if (!game_build_ported()) return;
+    const char* not_ported = build_timestamp == kPortToBuild ? "" : "; this mod is NOT ported to its own data's build";
+    size_t fields_found = 0;
+    for (const PortField& f : fields()) fields_found += f.value != kPortFieldUnresolved;
     if (is_table_build())
-        swlog("running on build %08x through the port table (%zu ranges from %08x)%s", game_build(), std::size(kPortRanges),
-              kPortFromBuild, build_timestamp == kPortToBuild ? "" : ": this mod is NOT ported to it");
+        swlog("running on build %08x through the port table (%zu ranges from %08x), %zu/%zu fields%s", game_build(),
+              std::size(kPortRanges), kPortFromBuild, fields_found, fields().size(), not_ported);
+    else if (use_core_port())
+        swlog("running on build %08x with the loader's port data (%s, signatures %08x; this mod's own: %08x): %zu of %zu "
+              "ranges, %zu/%zu fields; parts needing the others switch off%s", game_build(),
+              core_port()->table_build == game_build() ? "ported to it" : "not ported yet", core_port()->sig_build,
+              kSigBuild, ranges().size(), core_keys().size(), fields_found, fields().size(), not_ported);
     else
-        swlog("running on build %08x, not ported yet: %zu of %zu ranges found by signature (from %08x), parts needing the "
-              "others switch off%s", game_build(), ranges().size(), std::size(kSigRanges), kSigBuild,
-              build_timestamp == kPortToBuild ? "" : "; this mod is NOT ported to the signatures' build");
+        swlog("running on build %08x, not ported yet: %zu of %zu ranges found by signature (from %08x), %zu/%zu fields; "
+              "parts needing the others switch off%s", game_build(), ranges().size(), std::size(kSigRanges), kSigBuild,
+              fields_found, fields().size(), not_ported);
 }
 
 uintptr_t game_live_if_mapped(uintptr_t ghidra_address)
 {
     uint32_t rva = static_cast<uint32_t>(ghidra_address - kGhidraImageBase);
     if (!game_build_ported()) return game_base() + rva;
-    // Ranges are few (one per address the sources name); the smallest containing range wins.
-    const PortRange* best = nullptr;
-    for (const PortRange& r : ranges())
-        if (rva >= r.old_rva && rva - r.old_rva < r.size && (!best || r.size < best->size)) best = &r;
-    return best ? game_base() + best->new_rva + (rva - best->old_rva) : 0;
+    if (const PortRange* r = containing(ranges(), rva)) return game_base() + r->new_rva + (rva - r->old_rva);
+    // An address the core's data doesn't know (this mod is newer than the loader): this mod's own data.
+    if (use_core_port() && !containing(core_keys(), rva))
+        if (const PortRange* r = containing(own_ranges(), rva)) return game_base() + r->new_rva + (rva - r->old_rva);
+    return 0;
 }
 
 uintptr_t game_live(uintptr_t ghidra_address)
 {
     if (uintptr_t live = game_live_if_mapped(ghidra_address)) return live;
     if (g_port_misses.fetch_add(1) < 20) swlog("PORT: %llx is not in the port table", static_cast<unsigned long long>(ghidra_address));
+    return 0;
+}
+
+size_t game_field(const char* owner, size_t original_offset)
+{
+    if (!g_api || !owner) return 0;
+    if (game_build() == kOriginalBuild) return original_offset;
+    const uint32_t original = static_cast<uint32_t>(original_offset);
+    uint32_t value = 0;
+    PortFieldLookup r = port_field_lookup(fields(), owner, original, &value);
+    if (r == PortFieldLookup::not_covered && use_core_port()) r = port_field_lookup(own_fields(), owner, original, &value);
+    if (r == PortFieldLookup::found) return value;
+    if (g_port_misses.fetch_add(1) < 20)
+        swlog("FIELD: %s+%x %s on build %08x", owner, original,
+              r == PortFieldLookup::unresolved ? "can't be trusted (its anchors changed, or a field was inserted next to it)"
+                                               : "is not anchored (sdk/port_fields.txt)", game_build());
     return 0;
 }
 
@@ -341,6 +374,7 @@ void present_add_callback(PresentCallback cb) { g_api->on_present(g_mod, &presen
 
 extern "C" __declspec(dllexport) int swml_mod_init(const swml_api* api, swml_mod* mod)
 {
+    // A newly compiled mod may still use only the v1 prefix on an older core.
     if (!api || api->version < 1 || api->size < SWML_API_V1_SIZE) return 0;
     g_api = api;
     g_mod = mod;

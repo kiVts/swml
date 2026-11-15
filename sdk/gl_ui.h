@@ -1,10 +1,4 @@
 #pragma once
-// A small immediate-mode 2D renderer for custom menus on the game's OpenGL frame: antialiased rounded rectangles with
-// borders and soft shadows, and TrueType text placed by its baseline and measured exactly. Coordinates are window
-// pixels from the top left. Call from a present callback (render thread, the game's GL context current), between
-// begin() and end(), which save and restore every piece of GL state they touch. Not thread-safe.
-//
-// It draws over the whole frame, cursor included, so a menu that covers the game's own cursor has to draw one.
 #include <cstdint>
 
 namespace glui {

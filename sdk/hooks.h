@@ -3,7 +3,7 @@
 
 // Each feature file of a mod declares one HookRegistrar at file scope:
 //
-// static HookRegistrar reg{{"frametime", /*needs_known_build=*/false, &install}};
+//   static HookRegistrar reg{{"frametime", /*needs_known_build=*/false, &install}};
 //
 // swml_mod_init (swml_sdk.cpp) runs every registered install(); install() calls hook_api() /
 // hook_game() / hook_address() and returns false on failure. needs_known_build=true parts are

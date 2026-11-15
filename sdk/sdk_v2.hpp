@@ -14,7 +14,7 @@ inline const swml_api_v2* api() { return swml_get_v2(swml()); }
 inline bool require(uint64_t capabilities, const char* feature) {
     const auto* v2 = api();
     if (v2 && (v2->capabilities() & capabilities) == capabilities) return true;
-    mod_status("%s: required SDK capability unavailable", feature);
+    mod_status("%s: required SDK v2 capability unavailable", feature);
     return false;
 }
 inline swml_result on(const char* topic, swml_callback callback, void* context, swml_handle& handle) {

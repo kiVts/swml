@@ -64,7 +64,7 @@ inline int compare(const Version& a, const Version& b) {
 // Comparators joined by '&' or spaces are ANDed. '^' and '~' follow semver
 // upper bounds; prereleases match only ranges explicitly mentioning one.
 inline bool satisfies(std::string_view version, std::string_view range) {
-    if (range.empty() || range == "*") return true;
+    if (range.empty() || range == "*") return true; // preserves unconstrained legacy dependencies
     auto v = parse(version); if (!v) return false;
     bool mentions_prerelease = false, any = false; size_t at = 0;
     while (at < range.size()) {

@@ -1,4 +1,4 @@
-/* SWML SDK: C ABI; no STL objects or allocator ownership cross a DLL boundary.
+/* SWML SDK 2.0: C ABI; no STL objects or allocator ownership cross a DLL boundary.
  * See README.md for threading, cancellation, limits, and persistence contracts. */
 #ifndef SWML_V2_H
 #define SWML_V2_H
@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define SWML_SDK_VERSION "4.6.3"
+#define SWML_SDK_VERSION "4.4.0"
 #define SWML_V2_VERSION 1u
 #define SWML_MAX_PAYLOAD 65536u
 #define SWML_NET_MAX_PAYLOAD 896u

@@ -1,5 +1,5 @@
 #pragma once
-// Native widget composition on the retained C APIs. Call only inside the
+// Native widget composition on the retained v3/v4 C APIs. Call only inside the
 // owning UI callback. Every addition lives in the game's normal UI hierarchy.
 #include "presentation.h"
 #include <cmath>

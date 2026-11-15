@@ -1,4 +1,4 @@
-/* SDK: versioned C ABI. Every returned text buffer uses UTF-8 and needed
+/* SDK 4: versioned C ABI. Every returned text buffer uses UTF-8 and needed
  * includes its terminating NUL. JSON operations use the documented bounded
  * schema subset; see V4.md. No C++ object crosses this boundary. */
 #ifndef SWML_V4_H
@@ -23,7 +23,7 @@ enum { SWML_INPUT_PRESS=1, SWML_INPUT_RELEASE=2, SWML_INPUT_HELD=3 };
 enum { SWML_KEY_CTRL=1, SWML_KEY_SHIFT=2, SWML_KEY_ALT=4, SWML_KEY_SUPER=8 };
 typedef struct swml_action_desc {
     uint32_t size;
-    const char* name;
+    const char* name; /* owner namespace, e.g. frontier.inventory */
     const char* native_root_class; /* native UI context, not global desktop keys */
     uint32_t key, modifiers, repeat_ms; /* Windows virtual key; repeat=0 disables held events */
 } swml_action_desc;

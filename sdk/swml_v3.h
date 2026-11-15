@@ -1,5 +1,5 @@
-/* SDK: native game UI, commands, structured logging and writable settings.
- * tables remain unchanged. Native UI is NOT a SwapBuffers/GL overlay. */
+/* SDK 3: native game UI, commands, structured logging and writable settings.
+ * v1/v2 tables remain unchanged. Native UI is NOT a SwapBuffers/GL overlay. */
 #ifndef SWML_V3_H
 #define SWML_V3_H
 #include "swml_v2.h"
@@ -81,9 +81,6 @@ struct swml_api_v3 {
     swml_result (*ui_set_enabled)(swml_mod*, swml_ui_handle, int);
     swml_result (*ui_set_text)(swml_mod*, swml_ui_handle, const char*);
     swml_result (*ui_get_text)(swml_mod*, swml_ui_handle, char*, uint32_t capacity, uint32_t* needed);
-    /* Optional: match the native root's initial bounds before allocating handles.
-       * Nonmatching generic composites consume no root slots. Later edits do not unmount.
-       * With STATIC_TEXT_OBSERVER, height=-1 matches any measured height; other bounds remain exact. */
     swml_result (*ui_watch_rect)(swml_mod*, const char* native_class, const swml_ui_rect*, swml_ui_callback, void*, swml_handle*);
 };
 #define SWML_V3_BASE_SIZE ((uint32_t)offsetof(swml_api_v3, ui_watch_rect))
