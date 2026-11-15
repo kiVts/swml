@@ -758,7 +758,7 @@ bool button(const char* label, ImVec2 size, bool primary, float scale, ButtonLoo
     const float icon = look.link ? label_size.y * 0.62f : 0.0f, icon_gap = look.link ? label_size.y * 0.35f : 0.0f;
     if (size.x <= 0) size.x = label_size.x + icon_gap + icon + 44 * scale;
     if (size.y <= 0) size.y = label_size.y + 16 * scale;
-    const float cut = look.cut > 0 ? look.cut * scale : 0;
+    const float cut = look.cut < 0 ? size.y * bar_skew : look.cut * scale;
     ImVec2 p = ImGui::GetCursorScreenPos();
     bool pressed = ImGui::InvisibleButton(label, size);
     bool hovered = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
@@ -977,7 +977,7 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
             const float row_h = std::floor((logo.y - row_gap * (rows - 1)) / rows);
             const brand::ButtonLook small{row_h * 0.92f / scale, -1, false};
             const brand::ButtonLook small_link{small.font_px, -1, true};
-            const float step = 0;
+            const float step = (row_h + row_gap) * brand::bar_skew;
             const float stack_left = origin.x - pad + logo.x - 0.55f * F;
             std::string first = app.show_notice ? u8(app.notice_text) : app.checking ? "Checking..." : "Check for updates";
             ImGui::PushFont(brand::font, small.font_px * scale);
@@ -1219,9 +1219,9 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
         bool playable = idle && !app.game_cmd.empty();
         const float play_y = ImGui::GetCursorPosY();
         ImGui::BeginDisabled(!playable);
-        if (brand::button("PLAY", ImVec2(150 * scale, play_height), true, scale)) app.request_play(true);
+        if (brand::button("PLAY", ImVec2(150 * scale, play_height), true, scale, {17, 10, false})) app.request_play(true);
         ImGui::SameLine(0, spacing);
-        if (brand::button("PLAY WITHOUT MODS", ImVec2(0, play_height), false, scale)) app.request_play(false);
+        if (brand::button("PLAY WITHOUT MODS", ImVec2(0, play_height), false, scale, {17, 10, false})) app.request_play(false);
         ImGui::EndDisabled();
         ImGui::SameLine(0, 14 * scale);
         ImGui::SetCursorPosY(play_y + (play_height - ImGui::GetFrameHeight()) * 0.5f);
