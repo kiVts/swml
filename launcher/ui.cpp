@@ -10,6 +10,7 @@
 #include "zip.h"
 #include "settings_store.h"
 #include "settings_schema.h"
+#include "settings_layout.h"
 #include "mod_manifest.h"
 #include "swml_v2.h"
 #ifdef _WIN32
@@ -81,8 +82,10 @@ std::wstring status_word(const Mod& m)
 // --- settings panel --------------------------------------------------------------------------------
 // Same field logic as the old inline panel: schema fields first, INI-comment descriptions for
 // schema-free mods, unit-suffixed keys stay number fields, values saved through settings_store.
+// settings.default.ini sets the order and, with ";@ Label" lines, the names shown (settings_layout.h).
 struct SettingsItem {
     std::wstring section, key, initial, description;
+    std::wstring label; // shown instead of the key when set
     bool checkbox = false, heading = false;
     int schema_index = -1; // index into SettingsPanel::schema, -1 = schema-free
     std::string buffer; // edit buffer for text fields
@@ -109,40 +112,38 @@ struct SettingsPanel {
                 auto schema_bytes = swml_platform::read_bytes(schema_path, 65535);
                 if (!schema_bytes.empty()) schema = swml_settings::parse(swml_json::parse(schema_bytes));
             }
-            // INI comments supply descriptions for existing schema-free mods.
-            std::map<swml_settings_store::Key, std::wstring> descriptions;
-            auto source = swml_platform::read_text((fs::path(dir) / "settings.default.ini").wstring());
-            std::wstring section, description;
-            size_t start = 0;
-            while (start < source.size()) {
-                auto end = source.find(L'\n', start);
-                if (end == source.npos) end = source.size();
-                auto line = trim(source.substr(start, end - start));
-                start = end + 1;
-                if (line.starts_with(L";") || line.starts_with(L"#")) { if (!description.empty()) description += L" "; description += trim(line.substr(1)); }
-                else if (line.starts_with(L"[")) { auto close = line.find(L']'); section = swml_settings_store::lower(line.substr(1, close - 1)); description.clear(); }
-                else if (auto equal = line.find(L'='); equal != line.npos) { descriptions[{section, swml_settings_store::lower(trim(line.substr(0, equal)))}] = description; description.clear(); }
-            }
+            // INI comments supply descriptions for existing schema-free mods, ";@" lines their names and the order.
+            const auto layout = swml_settings_layout::parse(swml_platform::read_text((fs::path(dir) / "settings.default.ini").wstring()));
             auto base = swml_settings_store::defaults(dir), current = swml_settings_store::merged(dir);
             for (auto& field : schema) {
                 auto id = swml_settings_store::Key{swml_settings_store::lower(wide(field.section)), swml_settings_store::lower(wide(field.key))};
                 if (!base.contains(id)) base[id] = wide(swml_settings::encode(field, field.initial));
             }
+            std::vector<std::pair<swml_settings_store::Key, std::wstring>> ordered(base.begin(), base.end());
+            std::stable_sort(ordered.begin(), ordered.end(), [&](const auto& a, const auto& b) {
+                return swml_settings_layout::rank(layout, a.first) < swml_settings_layout::rank(layout, b.first);
+            });
 
-            std::wstring previous_section;
-            for (const auto& [id, value] : base) {
+            std::wstring previous_section, previous_heading;
+            for (const auto& [id, value] : ordered) {
                 if (id.first != previous_section) {
-                    SettingsItem heading;
-                    heading.heading = true;
-                    heading.key = L"[" + id.first + L"]";
-                    items.push_back(std::move(heading));
+                    const auto named = layout.section_labels.find(id.first);
+                    const std::wstring text = named != layout.section_labels.end() ? named->second : L"[" + id.first + L"]";
+                    if (text != previous_heading) { // two sections with the same name are listed under one heading
+                        SettingsItem heading;
+                        heading.heading = true;
+                        heading.key = text;
+                        items.push_back(std::move(heading));
+                        previous_heading = text;
+                    }
                     previous_section = id.first;
                 }
                 SettingsItem item;
                 item.section = id.first;
                 item.key = id.second;
                 item.initial = value;
-                item.description = descriptions[id];
+                if (const auto d = layout.descriptions.find(id); d != layout.descriptions.end()) item.description = d->second;
+                if (const auto l = layout.labels.find(id); l != layout.labels.end()) item.label = l->second;
                 for (size_t f = 0; f < schema.size(); f++)
                     if (swml_settings_store::lower(wide(schema[f].section)) == id.first && swml_settings_store::lower(wide(schema[f].key)) == id.second) {
                         item.schema_index = int(f);
@@ -321,9 +322,13 @@ struct App {
         }).detach();
     }
 
+    // Mods are only updated or installed from the index on the latest SWML: while a newer SWML is offered, every mod
+    // update button is the SWML update instead (mods built for the new SWML could otherwise land on the old one).
+    bool loader_outdated() const { return show_notice; }
+
     void start_updates(std::vector<swml_updates::Entry> entries, bool adding = false)
     {
-        if (checking || installing || entries.empty()) return;
+        if (checking || installing || entries.empty() || loader_outdated()) return;
         installing = true;
         update_status = (adding ? L"Installing " : L"Updating ") + std::to_wstring(entries.size()) + (entries.size() == 1 ? L" mod..." : L" mods...");
         std::thread([this, root = model.root, entries = std::move(entries), adding] {
@@ -381,6 +386,7 @@ struct App {
             reload_mods();
             auto count = std::count_if(model.mods.begin(), model.mods.end(), [&](const Mod& m) { return model.can_update(m, index, have_index); });
             update_status = count ? std::to_wstring(count) + (count == 1 ? L" update available." : L" updates available.") : L"Mods are up to date.";
+            if (count && show_notice) update_status += L" Update SWML first; mods update after it.";
             return;
         }
         installing = false;
@@ -1022,14 +1028,22 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
                 ImGui::EndDisabled();
             }
             row(1);
-            bool any_update = std::any_of(app.model.mods.begin(), app.model.mods.end(), [&](const Mod& m) { return app.model.can_update(m, app.index, app.have_index); });
-            ImGui::BeginDisabled(!idle || !any_update);
-            if (brand::button("Update all", ImVec2(stack_w, row_h), false, scale, small)) {
-                std::vector<swml_updates::Entry> entries;
-                for (const Mod& m : app.model.mods) if (app.model.can_update(m, app.index, app.have_index)) entries.push_back(*app.model.offered_update(m, app.index, app.have_index));
-                app.start_updates(std::move(entries));
+            if (app.loader_outdated()) {
+                // mods update only on the latest SWML: this is the SWML update, as the button above
+                ImGui::BeginDisabled(!idle || app.checking);
+                if (brand::button((first + "##notice_all").c_str(), ImVec2(stack_w, row_h), true, scale, small)) app.start_loader_update();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mods update after SWML. Download, install and restart SWML. Close Stormworks first.");
+                ImGui::EndDisabled();
+            } else {
+                bool any_update = std::any_of(app.model.mods.begin(), app.model.mods.end(), [&](const Mod& m) { return app.model.can_update(m, app.index, app.have_index); });
+                ImGui::BeginDisabled(!idle || !any_update);
+                if (brand::button("Update all", ImVec2(stack_w, row_h), false, scale, small)) {
+                    std::vector<swml_updates::Entry> entries;
+                    for (const Mod& m : app.model.mods) if (app.model.can_update(m, app.index, app.have_index)) entries.push_back(*app.model.offered_update(m, app.index, app.have_index));
+                    app.start_updates(std::move(entries));
+                }
+                ImGui::EndDisabled();
             }
-            ImGui::EndDisabled();
             row(2);
             if (brand::button("Website", ImVec2(stack_w, row_h), false, scale, small_link))
                 swml_platform::open_external(L"https://swml.kivts.net");
@@ -1162,14 +1176,14 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
                                 ImGui::SeparatorText(u8(item.key).c_str());
                             } else if (item.checkbox) {
                                 bool checked = item.checked;
-                                if (ImGui::Checkbox(u8(item.key).c_str(), &checked) && checked != item.checked) {
+                                if (ImGui::Checkbox(u8(item.label.empty() ? item.key : item.label).c_str(), &checked) && checked != item.checked) {
                                     item.checked = checked;
                                     panel.save(item, checked ? L"1" : L"0");
                                 }
                                 if (ImGui::IsItemHovered() && !item.description.empty()) ImGui::SetTooltip("%s", u8(item.description).c_str());
                             } else {
                                 ImGui::AlignTextToFramePadding();
-                                ImGui::TextUnformatted(u8(item.key).c_str());
+                                ImGui::TextUnformatted(u8(item.label.empty() ? item.key : item.label).c_str());
                                 if (ImGui::IsItemHovered() && !item.description.empty()) ImGui::SetTooltip("%s", u8(item.description).c_str());
                                 ImGui::SameLine(180 * scale);
                                 ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1206,9 +1220,16 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
         if (ImGui::Button("Remove")) app.remove_mod();
         ImGui::EndDisabled();
         ImGui::SameLine(0, spacing);
-        ImGui::BeginDisabled(!idle || !sel || !app.model.can_update(*sel, app.index, app.have_index));
-        if (ImGui::Button("Update mod")) app.start_updates({*app.model.offered_update(*sel, app.index, app.have_index)});
-        ImGui::EndDisabled();
+        if (app.loader_outdated()) {
+            ImGui::BeginDisabled(!idle || app.checking);
+            if (ImGui::Button(u8(app.notice_text).c_str())) app.start_loader_update();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mods update after SWML. Download, install and restart SWML. Close Stormworks first.");
+            ImGui::EndDisabled();
+        } else {
+            ImGui::BeginDisabled(!idle || !sel || !app.model.can_update(*sel, app.index, app.have_index));
+            if (ImGui::Button("Update mod")) app.start_updates({*app.model.offered_update(*sel, app.index, app.have_index)});
+            ImGui::EndDisabled();
+        }
         ImGui::SameLine(0, spacing);
         ImGui::BeginDisabled(!sel);
         if (ImGui::Button("Open mod folder")) swml_platform::open_external(sel->dir);
@@ -1284,6 +1305,14 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
             if (brand::button("REFRESH", ImVec2(0, 28 * scale), false, scale)) app.start_update_check();
             ImGui::EndDisabled();
             ImGui::TextWrapped("%s", app.update_status.empty() ? "Choose a mod to download and install." : u8(app.update_status).c_str());
+            if (app.loader_outdated()) {
+                // mods install and update only on the latest SWML
+                ImGui::BeginDisabled(app.checking || app.installing);
+                if (brand::button((u8(app.notice_text) + "##catalogue_notice").c_str(), ImVec2(0, 28 * scale), true, scale)) app.start_loader_update();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("Mods install and update after SWML.");
+            }
             ImGui::Separator();
             ImGui::BeginChild("##cataloguerows", ImVec2(0, -40 * scale));
             if (!app.have_index) ImGui::TextWrapped("%s", app.checking ? "Loading available mods..." : "Catalogue unavailable. Use Refresh to try again.");
@@ -1306,7 +1335,7 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
                 if (!entry.multiplayer.empty()) ImGui::TextDisabled("Multiplayer: %s", mp_text(wide(entry.multiplayer)));
                 if (entry.api > SWML_API_VERSION) ImGui::TextDisabled("Requires a newer SWML");
                 if (entry.obsolete) ImGui::TextWrapped("Obsolete: this functionality is included in SWML. No separate install is needed.");
-                ImGui::BeginDisabled(app.checking || app.installing || entry.api > SWML_API_VERSION || entry.obsolete || (present && !newer));
+                ImGui::BeginDisabled(app.checking || app.installing || app.loader_outdated() || entry.api > SWML_API_VERSION || entry.obsolete || (present && !newer));
                 if (ImGui::Button(entry.obsolete ? "Obsolete" : !present ? "Install" : newer ? "Update" : "Installed", ImVec2(130 * scale, 30 * scale)))
                     app.start_updates({entry}, !present);
                 ImGui::EndDisabled();
