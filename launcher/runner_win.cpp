@@ -1,9 +1,9 @@
 // Game launch + core loading, Windows / Wine / Proton only. Extracted from the old Win32
 // launcher so the new UI (and the headless --run mode used by swml_proton.sh) share one code
 // path. Two load methods:
-//  - SWML_STARTUP_LOADER: the game loads our opengl32 proxy, which starts the core in-process
-//    after wglMakeCurrent (no remote process access).
-//  - otherwise: wait for the game's renderer (opengl32.dll), then inject swml_core.dll.
+// - SWML_STARTUP_LOADER: the game loads our opengl32 proxy, which starts the core in-process
+// after wglMakeCurrent (no remote process access).
+// - otherwise: wait for the game's renderer (opengl32.dll), then inject swml_core.dll.
 #include "runner.h"
 #include "platform.h"
 #include "mod_manifest.h"

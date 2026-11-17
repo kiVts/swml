@@ -1,3 +1,3 @@
 #pragma once
-#define SWML_LOADER_VERSION "4.7.8"
+#define SWML_LOADER_VERSION "4.7.9"
 

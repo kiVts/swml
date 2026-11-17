@@ -11,6 +11,7 @@
 #include "core_v2.h"
 #include "core_v3.h"
 #include "core_v4.h"
+#include "core_port.h"
 #include "log_sessions.h"
 #include "health.h"
 #include "status_display.h"
@@ -197,6 +198,9 @@ const swml_api g_api = {
     core_v4_api(),
     swml_health::snapshot,
     [](swml_mod*) { swml_health::note_fault(); },
+    core_port_info(),
+    core_port_ranges(),
+    core_port_fields(),
 };
 
 // --- start-up ----------------------------------------------------------------------------------
@@ -214,7 +218,7 @@ void game_init()
             g_build_known = true;
     }
     corelog("game: %ls timestamp=0x%08x size=0x%x -> %s", name, nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage,
-            g_build_known ? "known build" : "UNKNOWN build (game updated?): mods using fixed addresses switch those parts off");
+            g_build_known ? "original build" : "a later build: mods port their addresses (see the port line)");
 }
 
 void ensure_settings(swml_mod* m)
@@ -412,6 +416,7 @@ DWORD WINAPI init_thread(void*)
         if (!g_log) OutputDebugStringA(("SWML log history: " + session.warning + "\n").c_str());
     }
     game_init();
+    core_port_init();
     if (!game_addrs_layout_ok()) {
         // A core built against a different copy of sdk/resolve.h would hook the wrong game addresses.
         corelog("build error: GameAddrs layout differs between core (%llx) and swml_lookup (%llx); no hooks installed",

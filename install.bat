@@ -3,6 +3,8 @@ setlocal
 title SWML installer
 if not exist "%~dp0swml_startup_setup.exe" goto not_extracted
 "%~dp0swml_startup_setup.exe" --install
+rem 2 = the user cancelled (folder picker closed, or No); setup already showed any error itself.
+if errorlevel 2 exit /b 2
 if errorlevel 1 goto failed
 start "" "%LOCALAPPDATA%\swml\swml.exe"
 exit /b 0

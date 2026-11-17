@@ -1,6 +1,7 @@
 #include "input_runtime.h"
 #include "native_ui.h"
 #include "resolve.h"
+#include "native_ui_focus.h"
 #include <windows.h>
 #include <atomic>
 #include <mutex>
@@ -83,9 +84,10 @@ void native_present(void* raw_dc){
 void native_observe(void* object,uintptr_t game){
     if(!requested())return;
     auto table=*static_cast<uintptr_t*>(object);if(!may_observe(table))return;
+    // Visibility and keyboard focus are covered by native UI layout/cleanup. Hover
+    // is separate, so moving the mouse must not unlock typing.
     if(!*reinterpret_cast<uint8_t*>(static_cast<uint8_t*>(object)+0x1c))return;
-    auto* focused_element=*reinterpret_cast<void**>(game+0x188);
-    bool text_entry=focused_element&&(native_object_is_a(focused_element,"mm_ui_element_editbox")||native_object_is_a(focused_element,"c_ui_element_editbox"));
+    bool text_entry=native_ui_text_entry(game,native_object_is_a);
     observe(reinterpret_cast<uintptr_t>(object),table,text_entry);
 }
 void native_forget(void* object){if(requested())forget(reinterpret_cast<uintptr_t>(object));}

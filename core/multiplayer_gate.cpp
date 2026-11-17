@@ -56,9 +56,6 @@ uint64_t rejection_time = 0;
 uint64_t last_pump = 0;
 bool have_pumped = false;
 uint64_t last_bind_attempt = 0;
-// The gate hooks the ISteamNetworkingMessages object only, by giving it a copy of its vtable with slots 0..3
-// replaced. The code behind those slots is not patched, since it may also serve other interfaces. The copy
-// has 16 slots so other mods that copy 16 entries from the object's vtable keep working.
 constexpr size_t vtable_slots = 16, max_tables = 4;
 void* tables[max_tables][vtable_slots]{}; // never freed: a call may still be on its way through an old one
 size_t tables_used = 0;
@@ -275,8 +272,6 @@ bool readable(const void* p, size_t bytes) {
         return false;
     return static_cast<const uint8_t*>(p) + bytes <= static_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
 }
-// Gives the object a copy of its current vtable with the gate in slots 0..3; the replaced entries become the
-// originals. Copying the current table (not Steam's) keeps any other wrapper, e.g. network_fixes, in the chain.
 bool wrap(void* object) {
     auto** current = *static_cast<void***>(object);
     if (tables_used == max_tables || !readable(current, sizeof(void*) * vtable_slots)) return false;
@@ -295,7 +290,6 @@ bool wrap(void* object) {
     InterlockedExchangePointer(static_cast<void**>(object), table);
     return true;
 }
-// Another vptr swap that copied the table before ours drops the gate; slot 3 is ours alone, so it tells.
 void keep_wrapped() {
     auto** current = *static_cast<void***>(messages);
     if (current == active_table || (readable(current, sizeof(void*) * 4) && current[3] == reinterpret_cast<void*>(&close_hook)))

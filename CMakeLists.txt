@@ -96,6 +96,8 @@ else()
 endif()
 target_include_directories(swml PRIVATE sdk launcher)
 target_link_libraries(swml PRIVATE swml_platform_core imgui libdeflate_static)
+include(launcher/brand/embed.cmake)
+swml_embed_brand(swml) # Chakra Petch + icons for the window and the exe
 if(WIN32)
   target_compile_definitions(swml PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
   if(MSVC)
@@ -164,7 +166,9 @@ if(SWML_BUILD_CORE AND WIN32 AND MSVC)
     core/native_ui.cpp
     core/status_display.cpp
     core/multiplayer_gate.cpp
-    core/log_sessions.cpp)
+    core/log_sessions.cpp
+    core/core_port.cpp
+    sdk/port_runtime.cpp)
   # This repository's sdk/ first: SWML_GAME_DATA_DIR only supplies the generated headers, and must not shadow
   # the SDK headers that swml_lookup is compiled against.
   target_include_directories(swml_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/sdk" "${SWML_GAME_DATA_DIR}")
@@ -186,6 +190,7 @@ if(SWML_BUILD_CORE AND WIN32 AND MSVC)
     add_executable(swml_startup_setup WIN32 bootstrap/setup.cpp)
     target_include_directories(swml_startup_setup PRIVATE sdk)
     target_link_libraries(swml_startup_setup PRIVATE swml_platform_core advapi32)
+    swml_brand_icon(swml_startup_setup) # the S icon on the installer
     target_compile_definitions(swml_startup_setup PRIVATE ${SWML_DEFS})
     target_compile_options(swml_startup_setup PRIVATE ${SWML_OPTS})
     target_compile_definitions(swml PRIVATE SWML_STARTUP_LOADER=1)
