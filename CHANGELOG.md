@@ -1,3 +1,5 @@
+4.7.11: Mods can show short coloured status text on the bottom-left SWML line.
+
 4.7.9: Supports the Stormworks v1.15.27 update and ports installed mods automatically.
 
 4.7.8: Match launcher and core release versions, including the in-game display.

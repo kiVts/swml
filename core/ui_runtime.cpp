@@ -337,6 +337,16 @@ swml_result set_text(swml_mod* m, swml_ui_handle id, const char* value) {
     if (!n->text_changed) n->original_text = previous;
     n->text_changed = true; n->last_text = value; backend().set_text(n->native, value, current->game); return SWML_OK;
 }
+swml_result set_text_styled(swml_mod* m, swml_ui_handle id, const char* value, const uint32_t* colors, int count) {
+    if (!utf8(value) || count < 0 || count > 3 || (count && !colors)) return SWML_INVALID;
+    std::lock_guard lock(mutex); auto result = access(m); if (result != SWML_OK) return result;
+    auto n = node(id); if (!n) return SWML_NOT_FOUND;
+    std::string previous; if (!backend().get_text(n->native, previous)) return SWML_INVALID;
+    result = claim(n); if (result != SWML_OK) return result;
+    if (!backend().text_styles || !backend().text_styles(n->native, colors, count)) return SWML_UNAVAILABLE;
+    if (!n->text_changed) n->original_text = previous;
+    n->text_changed = true; n->last_text = value; backend().set_text(n->native, value, current->game); return SWML_OK;
+}
 swml_result get_text(swml_mod* m, swml_ui_handle id, char* out, uint32_t capacity, uint32_t* needed) {
     if (needed) *needed = 0;
     if (!needed || (!out && capacity)) return SWML_INVALID;

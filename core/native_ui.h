@@ -27,6 +27,8 @@ struct NativeUiBackend {
     int (*control_value)(void*, std::string&) = nullptr;
     void (*control_set)(void*, const std::string&, uintptr_t game) = nullptr;
     void (*control_configure)(void*, const swml_ui_control_desc&, uintptr_t game) = nullptr;
+    // Colours (native AABBGGRR) of a label's markup styles <1>..<count> (count <= 3). false: not a label with styles.
+    bool (*text_styles)(void*, const uint32_t* colors, int count) = nullptr;
 };
 const NativeUiBackend& native_ui_backend();
 
@@ -49,6 +51,9 @@ swml_result set_visible(swml_mod*, swml_ui_handle, int);
 swml_result set_enabled(swml_mod*, swml_ui_handle, int);
 swml_result set_text(swml_mod*, swml_ui_handle, const char*);
 swml_result get_text(swml_mod*, swml_ui_handle, char*, uint32_t, uint32_t*);
+// Core only: set_text, after giving markup styles <1>..<count> these colours. SWML_UNAVAILABLE: the label has no
+// styles the core can set (left unchanged).
+swml_result set_text_styled(swml_mod*, swml_ui_handle, const char*, const uint32_t* colors, int count);
 swml_result create_control(swml_mod*, swml_ui_handle, const swml_ui_control_desc*, swml_ui_handle*);
 swml_result value_get(swml_mod*, swml_ui_handle, char*, uint32_t, uint32_t*);
 swml_result value_set(swml_mod*, swml_ui_handle, const char*);

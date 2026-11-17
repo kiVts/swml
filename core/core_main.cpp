@@ -15,6 +15,7 @@
 #include "log_sessions.h"
 #include "health.h"
 #include "status_display.h"
+#include "status_line.h" // swml_api status_line: private SDK until the next public SDK release
 #include "multiplayer_gate.h"
 #include "resolve.h"
 
@@ -201,6 +202,7 @@ const swml_api g_api = {
     core_port_info(),
     core_port_ranges(),
     core_port_fields(),
+    [](swml_mod* m, const char* text, uint32_t color) { core_status_line_set(m, text, color); },
 };
 
 // --- start-up ----------------------------------------------------------------------------------
@@ -255,6 +257,7 @@ void unload(swml_mod* m)
         m->hooks.clear();
     }
     core_events_drop(m);
+    core_status_line_set(m, nullptr, 0);
     // The DLL stays loaded: a thread it started may still be running; with no hooks or callbacks
     // left it does nothing.
 }

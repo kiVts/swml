@@ -5,12 +5,39 @@
 #include "swml_v2.h"
 #include "../launcher/loader_version.h"
 #include "multiplayer_gate.h"
+#include "status_line.h"
+#include <algorithm>
 #include <map>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
-struct Label { std::string base, last; };
+// Mods' segments (status_line.h), in the order they were first set.
+struct Segment { const swml_mod* mod; std::string text; uint32_t color; };
+std::mutex segments_mutex;
+std::vector<Segment> segments;
+
+// The mods' part of the line, plain and with colour markup: "<n>" switches the label to markup style n, whose colour
+// is styles[n - 1] (up to three distinct colours; a fourth keeps the label's own). "<" in text is written "<<".
+struct Segments { std::string plain, styled; std::vector<uint32_t> styles; };
+Segments segments_text() {
+    std::lock_guard lock(segments_mutex);
+    Segments out;
+    for (const auto& s : segments) {
+        std::string escaped;
+        for (char c : s.text) { if (c == '<') escaped += '<'; escaped += c; }
+        out.plain += " | " + escaped;
+        auto style = std::find(out.styles.begin(), out.styles.end(), s.color);
+        if (s.color && style == out.styles.end() && out.styles.size() < 3) style = out.styles.insert(out.styles.end(), s.color);
+        if (!s.color || style == out.styles.end()) { out.styled += " | " + escaped; continue; }
+        out.styled += " | <" + std::to_string(style - out.styles.begin() + 1) + ">" + escaped + "<0>";
+    }
+    return out;
+}
+
+struct Label { std::string base, last; std::vector<uint32_t> styles; bool styled = true; };
 std::map<swml_ui_handle, Label> labels;
 swml_mod owner = [] { swml_mod value; value.id = "swml.status"; return value; }();
 
@@ -54,10 +81,36 @@ void screen(const swml_ui_event* event, void*) {
     auto wanted = label.base + " | SWML V" SWML_LOADER_VERSION " " +
         std::to_string(status.loaded_mods) + " mods loaded" + (status.fault_found ? ", fault found" : "");
     if (const auto* message = core_multiplayer_notice(); *message) wanted += std::string(" | ") + message;
+    const auto mods = segments_text();
+    if (label.styled && !mods.styles.empty()) {
+        const auto styled = wanted + mods.styled;
+        if (styled == text && label.styles == mods.styles) return;
+        const auto result = sdk_ui::set_text_styled(&owner, event->root, styled.c_str(), mods.styles.data(), int(mods.styles.size()));
+        if (result == SWML_OK) { label.last = styled; label.styles = mods.styles; return; }
+        if (result != SWML_UNAVAILABLE) { swml_health::note_fault(); return; }
+        label.styled = false; // this label's styles aren't the layout we know: no colours, plain text from now on
+        corelog("status line: label colours unavailable; mods' text is shown in the label's colour");
+    }
+    wanted += mods.plain;
     if (wanted == text) return;
     if (sdk_ui::set_text(&owner, event->root, wanted.c_str()) == SWML_OK) label.last = wanted;
     else swml_health::note_fault();
 }
+}
+
+void core_status_line_set(const swml_mod* mod, const char* text, uint32_t color) {
+    std::string value = text ? text : "";
+    if (value.size() > SWML_STATUS_LINE_MAX) {
+        size_t cut = SWML_STATUS_LINE_MAX;
+        while (cut && (static_cast<unsigned char>(value[cut]) & 0xC0) == 0x80) --cut; // whole UTF-8 characters
+        value.resize(cut);
+    }
+    for (char& c : value) if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) c = ' ';
+    std::lock_guard lock(segments_mutex);
+    auto found = std::find_if(segments.begin(), segments.end(), [&](const auto& s) { return s.mod == mod; });
+    if (value.empty()) { if (found != segments.end()) segments.erase(found); }
+    else if (found != segments.end()) { found->text = std::move(value); found->color = color; }
+    else segments.push_back({mod, std::move(value), color});
 }
 
 bool core_status_install() {

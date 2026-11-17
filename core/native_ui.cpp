@@ -370,8 +370,15 @@ void set_text(void* p, const std::string& value, uintptr_t game) {
     String text{const_cast<char*>(value.c_str()), static_cast<uint32_t>(value.size()), static_cast<uint32_t>(value.size() + 1)};
     (is_a(p,"mm_ui_element_text")?set_base_text:set_text_native)(p, game, &text); // native setter copies and rebuilds geometry
 }
+bool text_styles(void* p, const uint32_t* colors, int count) {
+    if (!is_a(p, "mm_ui_element_text") || count < 0 || count > 3) return false;
+    auto* styles = reinterpret_cast<uint8_t*>(p) + 0x60;
+    for (int n = 0; n < 4; ++n) if (styles[5 * n + 4] > 1) return false; // not the layout we know: leave it alone
+    for (int n = 1; n <= count; ++n) memcpy(styles + 5 * n, &colors[n - 1], sizeof(uint32_t));
+    return true;
+}
 const NativeUiBackend backend{enable, native_find_vtable, table, is_a, children, create, attach, erase,
                                inspect, rect, visible, enabled, get_text, set_text,
-                               enable_control,create_control,control_value,control_set,control_configure};
+                               enable_control,create_control,control_value,control_set,control_configure,text_styles};
 }
 const NativeUiBackend& native_ui_backend() { return backend; }
