@@ -15,7 +15,7 @@
 #include "log_sessions.h"
 #include "health.h"
 #include "status_display.h"
-#include "status_line.h" // swml_api status_line: private SDK until the next public SDK release
+#include "status_line.h" // swml_api status_line
 #include "multiplayer_gate.h"
 #include "resolve.h"
 
