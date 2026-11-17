@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(swml_sdk VERSION 4.4.0 LANGUAGES C CXX)
+project(swml_sdk VERSION 4.5.0 LANGUAGES C CXX)
 # The mod SDK (swml_modsdk/swml_lookup + swml_add_mod) targets the Windows game: MSVC x64 and the
 # generated per-build headers are required. On other platforms (native Linux launcher, mingw
 # cross-checks) it is skipped; the launcher itself doesn't link it.

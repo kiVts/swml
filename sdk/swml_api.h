@@ -97,6 +97,9 @@ typedef struct swml_api {
     int (*port_info)(swml_port_info*);
     size_t (*port_ranges)(int native, swml_port_range* out, size_t cap);
     size_t (*port_fields)(swml_port_field* out, size_t cap);
+    /* Optional (check SWML_API_HAS_STATUS_LINE): this mod's segment on SWML's bottom-left line; NULL or "" removes it.
+     * color: native AABBGGRR, 0 = the label's own. Any thread; the core copies the text. See status_line.h. */
+    void (*status_line)(swml_mod* mod, const char* text, uint32_t color);
 } swml_api;
 
 #define SWML_API_V1_SIZE ((uint32_t)offsetof(swml_api, v2))
@@ -107,6 +110,7 @@ typedef struct swml_api {
 #define SWML_API_HAS_V3(api) ((api) && (api)->version >= 3 && (api)->size >= SWML_API_V3_SIZE && (api)->v3)
 #define SWML_API_HAS_V4(api) ((api) && (api)->version >= 4 && (api)->size >= SWML_API_V4_SIZE && (api)->v4)
 #define SWML_API_HAS_STATUS(api) ((api) && (api)->size >= offsetof(swml_api, report_fault) + sizeof(void*) && (api)->runtime_status && (api)->report_fault)
+#define SWML_API_HAS_STATUS_LINE(api) ((api) && (api)->size >= offsetof(swml_api, status_line) + sizeof(void*) && (api)->status_line)
 #define SWML_API_HAS_PORT(api) ((api) && (api)->size >= offsetof(swml_api, port_fields) + sizeof(void*) && (api)->port_info && (api)->port_ranges && (api)->port_fields)
 static inline void swml_report_fault(const swml_api* api, swml_mod* mod) {
     if (SWML_API_HAS_STATUS(api)) api->report_fault(mod);

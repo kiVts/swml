@@ -10,6 +10,7 @@
 #include "port_table.h"
 #include "present.h"
 #include "sdk.h"
+#include "status_line.h"
 
 #include <windows.h>
 #include <algorithm>
@@ -368,6 +369,13 @@ bool hook_game(uintptr_t ghidra_address, void* detour, void** original)
     uintptr_t live = game_live(ghidra_address);
     if (!live) return false;
     return hook_address(live, detour, original);
+}
+
+bool status_line(const char* text, uint32_t color)
+{
+    if (!SWML_API_HAS_STATUS_LINE(g_api)) return false;
+    g_api->status_line(g_mod, text, color);
+    return true;
 }
 
 void present_add_callback(PresentCallback cb) { g_api->on_present(g_mod, &present_trampoline, reinterpret_cast<void*>(cb)); }
