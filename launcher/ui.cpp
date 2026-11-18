@@ -1169,6 +1169,14 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
                         }
                         ImGui::TextDisabled("Saved immediately; takes effect when the game next starts.");
                         ImGui::BeginChild("##settings", ImVec2(0, 0), ImGuiChildFlags_None);
+                        // Value fields start after the longest label, at most 60% across; a longer label gets its
+                        // field on the next line instead of under it.
+                        const float gap = ImGui::GetStyle().ItemSpacing.x * 2;
+                        float column = 180 * scale;
+                        for (const auto& item : panel.items)
+                            if (!item.heading && !item.checkbox)
+                                column = std::max(column, ImGui::CalcTextSize(u8(item.label.empty() ? item.key : item.label).c_str()).x + gap);
+                        column = std::min(column, std::max(180 * scale, ImGui::GetContentRegionAvail().x * 0.6f));
                         for (size_t i = 0; i < panel.items.size(); i++) {
                             auto& item = panel.items[i];
                             ImGui::PushID(int(i));
@@ -1182,10 +1190,12 @@ int run(const std::wstring& root, const std::wstring& game_cmd)
                                 }
                                 if (ImGui::IsItemHovered() && !item.description.empty()) ImGui::SetTooltip("%s", u8(item.description).c_str());
                             } else {
+                                const std::string name = u8(item.label.empty() ? item.key : item.label);
                                 ImGui::AlignTextToFramePadding();
-                                ImGui::TextUnformatted(u8(item.label.empty() ? item.key : item.label).c_str());
+                                ImGui::TextUnformatted(name.c_str());
                                 if (ImGui::IsItemHovered() && !item.description.empty()) ImGui::SetTooltip("%s", u8(item.description).c_str());
-                                ImGui::SameLine(180 * scale);
+                                if (ImGui::CalcTextSize(name.c_str()).x + gap <= column) ImGui::SameLine(column);
+                                else ImGui::SetCursorPosX(column); // own line, aligned with the other fields
                                 ImGui::SetNextItemWidth(-FLT_MIN);
                                 char buffer[4096];
                                 std::strncpy(buffer, item.buffer.c_str(), sizeof(buffer) - 1);

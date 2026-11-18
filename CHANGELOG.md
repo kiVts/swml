@@ -1,3 +1,5 @@
+4.7.13: Mod setting names are no longer cut off by their value fields.
+
 4.7.12: Readable mod setting names; mod updates wait until SWML is up to date.
 
 4.7.11: Mods can show short coloured status text on the bottom-left SWML line.
