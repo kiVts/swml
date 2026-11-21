@@ -7,10 +7,7 @@
 [![Support on Buy Me a Coffee](https://swml.kivts.net/brand/badges/dark/coffee.svg)](https://buymeacoffee.com/kivts)
 
 Stormworks Mod Loader: `swml.exe` (the mod window and launcher) and `swml_core.dll` (loaded into the game, it loads the mods).
-On Linux the mod window is a **native app** (`swml`, Dear ImGui + SDL3, Wayland or X11); the game itself still runs through Proton with the Windows loader.
 
-| Folder | What's in it |
-|---|---|
 | `core/` | `swml_core.dll`: logging, crash capture, shared hooks, mod loading |
 | `launcher/` | `swml.exe` / `swml`: the mod list, settings, starting the game |
 | `sdk/` | The headers and helpers mods are built with |
@@ -21,6 +18,9 @@ On Linux the mod window is a **native app** (`swml`, Dear ImGui + SDL3, Wayland 
 Extract the release zip and run `install.bat`. It copies the loader to your appdata/local and opens it. After that copy the launch options & add them to stormworks properties.
 After that start stormworks from steam normally, you can then click "Add Mods..." and select a zipfile for a mod. Be careful what you install.
 For existing mods that you could use, go to [SWML Website](https://swml.kivts.net/mods.html)
+
+
+**Since SWML 4.8.0 dedicated servers are supported**
 
 ### Linux (Steam + Proton)
 
@@ -35,11 +35,6 @@ It finds the prefix, installs the native mod window plus the Windows loader into
 game back to Proton, which runs `swml.exe --run` headless to install the enabled mods' game data and load `swml_core.dll`.
 `SWML_OFF=1 %command%` starts the game untouched. Re-running the installer updates the loader but keeps your mods and settings.
 
-The native window runs on Wayland and X11, scales with the display, and uses the desktop's file picker (zenity/kdialog) and trash.
-The release binary is fully static (only libc/libm), so it also runs on SteamOS/Steam Deck without installing anything.
-
-**Dedicated servers are not supported!** They're an entirely different binary and need two different versions of... well, everything. They might get supported later.
-
 ## Build
 
 The launcher (mod window) builds on Windows, Linux and macOS, and cross-builds with mingw. The in-game core and startup bootstrap
@@ -50,8 +45,6 @@ are Windows-only and need Visual Studio Build Tools 2022 plus generated per-game
 cmake -B build -A x64 -DSWML_GAME_DATA_DIR=path/to/generated/headers
 cmake --build build --config Release
 ```
-
-Without `SWML_GAME_DATA_DIR` (or on Linux) only the launcher is built:
 
 ```
 cmake -B build -DSWML_BUILD_CORE=OFF
